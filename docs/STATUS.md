@@ -1,5 +1,11 @@
 # ShinkaLife status (updated: Supabase integration session)
-## Supabase integration (this session)
+## Diagnosis: "database isn't fully set up" + "Could not find table public.profiles" (15 Oct)
+- **Cause (verified by simulation, not by access to your live project):** migrations were not applied on the project the site points to. The deployed `dbcheck.js` had a bug (HEAD request: supabase-js reports a bodiless 404 as success), so it reported only `award_task_xp()` and hid every missing table. Reproduced: a project with nothing installed gives exactly the two messages in the screenshot with the deployed code, and a correct list of 16 missing objects with the fixed code.
+- **Fixes in this copy:** `js/dbcheck.js` (GET probe), `js/auth.js` (`saveProfile` upserts), `sw.js` (v2 so browsers fetch the new files), migration `0005_backfill_profiles.sql`, `supabase/checks/verify_setup.sql`, tests. Migrations 0001-0004 are unchanged and identical to the ones in the deployed zip.
+- **Tested:** 82 unit/UI tests; 69 local database checks; repair procedure on a scratch Postgres (wrong order fails cleanly, correct order works, re-runs are harmless, backfill works).
+- **Not verified:** your live project's actual state (run verify_setup.sql query 1), and the Supabase SQL Editor's own transaction behaviour (assumed to match a single simple query; always re-run query 1 after any error).
+
+## Supabase integration (earlier session)
 - **Done:** your project URL + publishable key are in `js/config.js`; `.env.example` documents the names (static site: no runtime env vars). `js/config-check.js` refuses `sb_secret_`/`service_role` keys and malformed URLs, and the setup screen now says exactly what is wrong.
 - **Done:** `js/dbcheck.js` + red banner after login that lists missing tables/function and which migrations (0001-0004) to run. This is how we learn whether migrations are applied remotely. I could **not** check from here.
 - **Fixed (auth review):** token-refresh/duplicate sign-in events no longer reload the whole app; recovery links now show the new-password screen *before* any private data loads and then enter the app; sign-out wipes private data from the page.
@@ -27,6 +33,6 @@
 New: migrations 0003, 0004; tests/db/rls2.sql; tests/{engines,flows,ui.smoke,pwa}.test.mjs; js/{recur-core,schedule-core,planner-core,planner-ai,xp-core,reminders-core,repo,repo-supabase,repo-mock,service,state,ui,pages,notify}.js; manifest.webmanifest, sw.js, offline.html, vendor/supabase.js (pinned 2.45.4, MIT), assets/icon-*.png; .github/workflows/pages.yml; android/capacitor.config.template.json; docs/{ARCHITECTURE,NOTIFICATIONS,ANDROID,PRIVACY}.md.
 Edited: index.html, css/app.css, js/{app,quests,config}.js, tests/db/{rls.sql,run.sh}, package.json, README.md. Removed: js/data.js.
 ## Next actions
-1. **You (about 15 minutes):** README > *Connect Supabase*: run migrations 0001-0004 in order, set Auth URLs, then run the app and do the verification list. Send me any red banner text, error message, or what you saw.
+1. **You (about 15 minutes):** README > *Connect Supabase*: run migrations 0001-0005 in order (check first with supabase/checks/verify_setup.sql), set Auth URLs, then run the app and do the verification list. Send me any red banner text, error message, or what you saw.
 2. **Me, after your results:** fix whatever the live test reveals, then verify cross-account isolation and XP through the real API.
-3. **Independent work still open:** recurring tasks + projects/milestones (migration 0005), skill tagging UI, drag-and-drop, AI Edge Function (needs your provider decision and approval), real-browser visual QA, decide on the unreferenced duplicate files listed above.
+3. **Independent work still open:** recurring tasks + projects/milestones (migration 0006; 0005 is the profile backfill), skill tagging UI, drag-and-drop, AI Edge Function (needs your provider decision and approval), real-browser visual QA, decide on the unreferenced duplicate files listed above.

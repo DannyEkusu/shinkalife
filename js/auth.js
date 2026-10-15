@@ -17,5 +17,5 @@ export async function loadAccount(uid) {
     run(sb.from('preferences').select('theme').eq('user_id', uid).maybeSingle())]);
   return { profile: p, theme: f?.theme ?? {} };
 }
-export const saveProfile = (uid, v) => run(sb.from('profiles').update(v).eq('id', uid));
+export const saveProfile = (uid, v) => run(sb.from('profiles').upsert({ id: uid, ...v }, { onConflict: 'id' }));   // upsert: also works for accounts whose profile row was never created
 export const saveTheme = (uid, theme) => run(sb.from('preferences').upsert({ user_id: uid, theme }, { onConflict: 'user_id' }));

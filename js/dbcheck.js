@@ -4,7 +4,8 @@ export const REQUIRED = [['profiles', '0001'], ['preferences', '0001'], ['catego
 const gone = e => !!e && (['PGRST205', 'PGRST202', '42P01', '42883'].includes(e.code) || /could not find|does not exist/i.test(e.message || ''));
 const offline = e => !!e && /failed to fetch|network|fetch failed|load failed/i.test(e.message || '');
 export async function checkDatabase(sb) {
-  const probes = REQUIRED.map(async ([name, mig]) => ({ name, mig, error: (await sb.from(name).select('*', { count: 'exact', head: true }).limit(0)).error }));
+  // Plain GET, NOT a HEAD request: a failed HEAD has no body, and supabase-js reports a bodiless 404 as success, which hid missing tables.
+  const probes = REQUIRED.map(async ([name, mig]) => ({ name, mig, error: (await sb.from(name).select('*').limit(0)).error }));
   probes.push((async () => ({ name: 'award_task_xp()', mig: '0004', error: (await sb.rpc('award_task_xp', { p_task_id: '00000000-0000-0000-0000-000000000000' })).error }))()); // raises "task not found" if installed; writes nothing
   const res = await Promise.all(probes), missing = res.filter(r => gone(r.error)).map(({ name, mig }) => ({ name, mig }));
   return { ok: !missing.length && !res.some(r => offline(r.error)), unreachable: res.some(r => offline(r.error)), missing, migrations: [...new Set(missing.map(m => m.mig))].sort() };

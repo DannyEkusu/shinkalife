@@ -76,3 +76,4 @@ select t.su(); delete from auth.users where id = 'aaaaaaaa-0000-0000-0000-000000
 select t.ok('deleting a user cascades all their data', (select count(*) from public.tasks) + (select count(*) from public.categories) + (select count(*) from public.subtasks) + (select count(*) from public.profiles where id='aaaaaaaa-0000-0000-0000-000000000001') = 0);
 
 \i :root/tests/db/rls2.sql
+\i :root/tests/db/rls3.sql

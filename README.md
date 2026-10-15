@@ -15,11 +15,11 @@ Sample mode (or `?mock=1`) uses an in-memory mock repository with a permanent ba
 Your project's **public** URL and **publishable key** are already in `js/config.js`. The publishable key is not a password: it only says "this app talks to this project". What protects your data is Row Level Security inside the database. Never put a `service_role` key, an `sb_secret_` key or your database password in any file of this project (the app refuses to start if it finds one).
 
 **1. Create the database tables (once, in order).** Supabase dashboard > *SQL Editor* > *New query*. For each file below: open it, copy everything, paste, press *Run*. Expect "Success. No rows returned". If you see "already exists", you ran it before: skip it.
-   `supabase/migrations/0001_profiles_preferences.sql` then `0002_categories_tasks_subtasks.sql` then `0003_calendar_planner_reminders.sql` then `0004_xp_ledger.sql`
+   `0001_profiles_preferences.sql` then `0002_categories_tasks_subtasks.sql` then `0003_calendar_planner_reminders.sql` then `0004_xp_ledger.sql` then `0005_backfill_profiles.sql` (all in `supabase/migrations/`). **Before running anything**, you can see what already exists: paste the queries from `supabase/checks/verify_setup.sql` one at a time (they only read, never change anything). Only run the migrations that are missing, always in number order. 0005 gives accounts you created *before* the tables existed their profile row; it is safe to run more than once.
 **2. Tell Auth where your app lives.** *Authentication > URL Configuration*: set **Site URL** to `http://localhost:8080`, and add these **Redirect URLs**: `http://localhost:8080/**` and, once deployed, `https://<your-github-username>.github.io/<repo-name>/**`. Without this, confirmation and reset links in emails will not bring you back to the app.
 **3. Email confirmation.** *Authentication > Sign In / Providers > Email*. "Confirm email" ON is recommended and the app handles both settings. Supabase's built-in email sender allows only a few emails per hour; for heavy testing confirm test users by hand in *Authentication > Users*, or add your own SMTP later.
 **4. Passwords.** Set the minimum length to 8 or more (the app requires 8).
-**5. Run the app** (`python3 -m http.server 8080`, open http://localhost:8080). After you log in, the app checks your database. A red banner lists any missing tables and which migration to run. No banner = all four migrations are in place.
+**5. Run the app** (`python3 -m http.server 8080`, open http://localhost:8080). After you log in, the app checks your database. A red banner lists any missing tables and which migration to run. No banner = migrations 0001-0004 are in place (run `verify_setup.sql` query 5 to confirm 0005 too).
 
 ### Verify after connecting (tell me the results)
 - Sign up, confirm the email (if enabled), log in, **reload the page** (you should stay logged in), log out, request a password reset and use the link.
@@ -37,6 +37,7 @@ The frontend is fully static and uses relative paths, so it works on a project s
 `docs/ARCHITECTURE.md` trust model and layers · `docs/NOTIFICATIONS.md` reminder tiers · `docs/ANDROID.md` Capacitor plan (not built) · `docs/PRIVACY.md` draft · `docs/STATUS.md` progress and next action.
 
 ## Troubleshooting
+- *"Could not find the table 'public.profiles' in the schema cache" or a banner about `award_task_xp()`:* the migrations haven't been run on THIS Supabase project (check the project ref in the dashboard URL matches `js/config.js`). Run `supabase/checks/verify_setup.sql` query 1, then apply the missing migrations in order. Only if every row says `present = true` and the error persists, run `notify pgrst, 'reload schema';` in the SQL Editor and wait 10 seconds.
 - *Setup screen even though config is filled:* hard-reload; check the browser console for a failed `vendor/supabase.js` load.
 - *"Set your available hours":* Settings > Available hours, then the planner works.
 - *Sign-up email links go to the wrong place:* fix Site URL / Redirect URLs in Supabase.
