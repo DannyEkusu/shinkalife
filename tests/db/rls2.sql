@@ -1,0 +1,58 @@
+-- Calendar, reminders and XP ledger tests (users Carol and Dave)
+insert into auth.users (id) values ('cccccccc-0000-0000-0000-000000000003'), ('dddddddd-0000-0000-0000-000000000004');
+select t.as_user('cccccccc-0000-0000-0000-000000000003');
+insert into public.tasks (title, quest_type, priority, status, skill) values ('Prove theorem', 'main', 3, 'done', 'scholar');
+insert into public.tasks (title) values ('Open task');
+select t.su(); insert into t.ids select 'ctask', id from public.tasks where title = 'Prove theorem'; insert into t.ids select 'copen', id from public.tasks where title = 'Open task';
+select t.as_user('cccccccc-0000-0000-0000-000000000003');
+select t.ok('award for main/high task is 60 XP', (public.award_task_xp((select v from t.ids where k = 'ctask'))->>'xp')::int = 60);
+select t.ok('second award for same task is a no-op', (public.award_task_xp((select v from t.ids where k = 'ctask'))->>'awarded')::boolean = false and (select count(*) from public.xp_ledger) = 1);
+update public.tasks set status = 'todo' where title = 'Prove theorem'; update public.tasks set status = 'done' where title = 'Prove theorem';
+select t.ok('reopen + complete again cannot be farmed', (public.award_task_xp((select v from t.ids where k = 'ctask'))->>'awarded')::boolean = false and (select sum(xp) from public.xp_ledger) = 60);
+select t.fails('award for an unfinished task is rejected', $$select public.award_task_xp((select v from t.ids where k = 'copen'))$$);
+select t.fails('client cannot insert XP', $$insert into public.xp_ledger (user_id, source_type, source_id, xp) values (auth.uid(), 'task', gen_random_uuid(), 50)$$);
+select t.fails('client cannot edit XP', $$update public.xp_ledger set xp = 200$$);
+select t.fails('client cannot delete XP', $$delete from public.xp_ledger$$);
+select t.fails('client cannot grant achievements', $$insert into public.achievements_unlocked (user_id, key) values (auth.uid(), 'level-5')$$);
+select t.fails('invalid skill rejected', $$insert into public.tasks (title, skill) values ('x', 'wizard')$$);
+insert into public.tasks (title, quest_type, priority, status) select 'cap' || g, 'main', 3, 'done' from generate_series(1, 5) g;
+do $$ declare r record; begin for r in select id from public.tasks where title like 'cap%' loop perform public.award_task_xp(r.id); end loop; end $$;
+select t.ok('daily XP cap holds (300) and every award is still recorded once', (select sum(xp) from public.xp_ledger) = 300 and (select count(*) from public.xp_ledger) = 6);
+select t.ok('achievements follow real activity only', (select array_agg(key order by key) from public.achievements_unlocked) = array['first-quest']);
+
+-- calendar
+insert into public.schedule_blocks (title, start_at, end_at, task_id) select 'Study', '2026-10-14 09:00+00', '2026-10-14 10:00+00', v from t.ids where k = 'copen';
+select t.fails('overlapping planned blocks are rejected by the database', $$insert into public.schedule_blocks (title, start_at, end_at) values ('Clash', '2026-10-14 09:30+00', '2026-10-14 10:30+00')$$);
+select t.ok('adjacent blocks are allowed', t.affected($$insert into public.schedule_blocks (title, start_at, end_at) values ('Next', '2026-10-14 10:00+00', '2026-10-14 11:00+00')$$) = 1);
+select t.ok('completed blocks do not block history', t.affected($$insert into public.schedule_blocks (title, start_at, end_at, status) values ('Old', '2026-10-14 09:30+00', '2026-10-14 10:30+00', 'done')$$) = 1);
+select t.fails('block ending before it starts rejected', $$insert into public.schedule_blocks (title, start_at, end_at) values ('Bad', '2026-10-15 10:00+00', '2026-10-15 09:00+00')$$);
+select t.fails('invalid event timezone rejected', $$insert into public.events (title, start_at, end_at, tz) values ('E', '2026-10-14 09:00+00', '2026-10-14 10:00+00', 'Mars/Base')$$);
+select t.fails('event longer than 24h rejected', $$insert into public.events (title, start_at, end_at) values ('E', '2026-10-14 09:00+00', '2026-10-16 10:00+00')$$);
+insert into public.events (title, start_at, end_at, tz, rrule) values ('Music', '2026-10-18 15:00+00', '2026-10-18 16:00+00', 'Europe/London', '{"freq":"weekly","days":[0]}');
+select t.su(); insert into t.ids select 'cevent', id from public.events; insert into t.ids select 'cblock', id from public.schedule_blocks where title = 'Study'; select t.as_user('cccccccc-0000-0000-0000-000000000003');
+select t.fails('move exception needs new times', $$insert into public.event_exceptions (event_id, occurrence_date, action) select v, '2026-10-25', 'move' from t.ids where k = 'cevent'$$);
+select t.ok('skip exception accepted', t.affected($$insert into public.event_exceptions (event_id, occurrence_date, action) select v, '2026-10-25', 'skip' from t.ids where k = 'cevent'$$) = 1);
+select t.fails('availability end must follow start', $$insert into public.availability (weekday, start_min, end_min) values (1, 600, 600)$$);
+insert into public.availability (weekday, start_min, end_min) values (1, 540, 1020);
+select t.fails('duplicate availability window rejected', $$insert into public.availability (weekday, start_min, end_min) values (1, 540, 1000)$$);
+select t.fails('absurd reminder lead rejected', $$insert into public.reminder_settings (lead_minutes) values (5000)$$);
+insert into public.reminder_settings (lead_minutes) values (15);
+select t.fails('non-https push endpoint rejected', $$insert into public.push_subscriptions (endpoint, p256dh, auth) values ('http://x', 'a', 'b')$$);
+insert into public.push_subscriptions (endpoint, p256dh, auth) values ('https://push.example/abc', 'a', 'b');
+select t.fails('unknown planner source rejected', $$insert into public.planner_drafts (input, source, proposal) values ('x', 'gpt', '{}')$$);
+insert into public.planner_drafts (input, source, proposal) values ('x', 'rules', '{}');
+insert into public.weekly_reviews (week_start, notes) values ('2026-10-12', 'Good week');
+select t.fails('one review per week', $$insert into public.weekly_reviews (week_start, notes) values ('2026-10-12', 'again')$$);
+
+select t.as_user('dddddddd-0000-0000-0000-000000000004');
+select t.ok('other user sees none of Carol''s calendar/reminder/XP data', t.cnt('select 1 from public.schedule_blocks') + t.cnt('select 1 from public.events') + t.cnt('select 1 from public.event_exceptions') + t.cnt('select 1 from public.availability') + t.cnt('select 1 from public.reminder_settings') + t.cnt('select 1 from public.push_subscriptions') + t.cnt('select 1 from public.planner_drafts') + t.cnt('select 1 from public.weekly_reviews') + t.cnt('select 1 from public.xp_ledger') + t.cnt('select 1 from public.achievements_unlocked') = 0);
+select t.ok('other user may use the same time slot', t.affected($$insert into public.schedule_blocks (title, start_at, end_at) values ('Mine', '2026-10-14 09:00+00', '2026-10-14 10:00+00')$$) = 1);
+select t.fails('cannot attach a block to Carol''s task', $$insert into public.schedule_blocks (title, start_at, end_at, task_id) select 'x', '2026-10-20 09:00+00', '2026-10-20 10:00+00', v from t.ids where k = 'copen'$$);
+select t.fails('cannot add an exception to Carol''s event', $$insert into public.event_exceptions (event_id, occurrence_date, action) select v, '2026-11-01', 'skip' from t.ids where k = 'cevent'$$);
+select t.ok('cannot move or delete Carol''s block', t.affected($$update public.schedule_blocks set status = 'skipped' where title = 'Study'$$) + t.affected($$delete from public.events$$) = 0);
+select t.fails('other user cannot award XP on Carol''s task', $$select public.award_task_xp((select v from t.ids where k = 'ctask'))$$);
+select t.as_anon();
+select t.fails('anonymous cannot call award_task_xp', $$select public.award_task_xp(gen_random_uuid())$$);
+select t.fails('anonymous cannot read blocks', 'select * from public.schedule_blocks');
+select t.su(); delete from auth.users where id = 'cccccccc-0000-0000-0000-000000000003';
+select t.ok('deleting a user removes calendar, reminder and XP data', (select count(*) from public.events) + (select count(*) from public.xp_ledger where user_id = 'cccccccc-0000-0000-0000-000000000003') + (select count(*) from public.reminder_settings) = 0);

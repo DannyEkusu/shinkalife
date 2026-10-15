@@ -1,0 +1,73 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ShinkaLife</title><meta name="theme-color" content="#16191a">
+<link rel="icon" href="assets/icon.png"><link rel="manifest" href="manifest.webmanifest"><link rel="apple-touch-icon" href="assets/icon-192.png"><link rel="stylesheet" href="css/tokens.css"><link rel="stylesheet" href="css/app.css">
+<script src="vendor/supabase.js"></script></head><body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><linearGradient id="lg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4ade80"/><stop offset="1" stop-color="#4f9cff"/></linearGradient>
+<symbol id="logo" viewBox="0 0 48 48"><g fill="none" stroke="url(#lg)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"><path d="M8 17l16-9 16 9"/><path d="M8 27l16-9 16 9"/><path d="M8 37l16-9 16 9"/></g></symbol><symbol id="i-dash" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></symbol><symbol id="i-plan" viewBox="0 0 24 24"><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></symbol><symbol id="i-cal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></symbol><symbol id="i-quest" viewBox="0 0 24 24"><path d="M5 22V3"/><path d="M5 4h12l-2 4 2 4H5"/></symbol><symbol id="i-char" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol><symbol id="i-prog" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></symbol><symbol id="i-set" viewBox="0 0 24 24"><path d="M4 6h8M16 6h4M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="14" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/></symbol></defs></svg>
+
+<section class="view center" id="view-boot"><p>Loading…</p></section>
+
+<section class="view center" id="view-setup" hidden><div class="panel">
+<div class="brand"><svg><use href="#logo"/></svg>ShinkaLife</div>
+<h1>Connect your database</h1>
+<p>Supabase isn’t configured, so sign-in is unavailable. Add your project URL and anon key to <code>js/config.js</code>, run the migration, then reload. (If that’s done, the Supabase library may have failed to load from its CDN; check your connection.) See README.md.</p>
+<p id="setup-issue" class="msg err" role="alert" hidden></p><button class="btn ghost" id="btn-preview">Open with sample data (not saved)</button></div></section>
+
+<section class="view center" id="view-auth" hidden><div class="panel">
+<div class="brand"><svg><use href="#logo"/></svg>ShinkaLife</div><p class="muted">Plan. Progress. Evolve.</p>
+<div class="tabs" role="tablist"><button class="btn ghost" role="tab" data-tab="in" aria-selected="true">Log in</button><button class="btn ghost" role="tab" data-tab="up" aria-selected="false">Create account</button></div>
+<form id="f-in" novalidate><label for="in-email">Email</label><input id="in-email" type="email" autocomplete="email" required>
+<label for="in-pw">Password</label><input id="in-pw" type="password" autocomplete="current-password" required>
+<p style="margin-top:16px"><button class="btn" type="submit">Log in</button> <button class="btn ghost" type="button" id="btn-forgot">Reset password</button></p></form>
+<form id="f-up" hidden novalidate><label for="up-name">Display name</label><input id="up-name" type="text" maxlength="60" autocomplete="nickname">
+<label for="up-email">Email</label><input id="up-email" type="email" autocomplete="email" required>
+<label for="up-pw">Password (8+ characters)</label><input id="up-pw" type="password" autocomplete="new-password" minlength="8" required>
+<p style="margin-top:16px"><button class="btn" type="submit">Create account</button></p></form>
+<div class="msg" id="auth-msg" role="status" aria-live="polite"></div></div></section>
+
+<section class="view center" id="view-recovery" hidden><div class="panel"><h1>Set a new password</h1>
+<form id="f-rec" novalidate><label for="rec-pw">New password (8+ characters)</label><input id="rec-pw" type="password" autocomplete="new-password" minlength="8" required>
+<p style="margin-top:16px"><button class="btn" type="submit">Save password</button></p></form><div class="msg" id="rec-msg" role="status" aria-live="polite"></div></div></section>
+
+<div class="view shell" id="view-app" hidden>
+<nav class="side" aria-label="Main"><div class="brand"><svg><use href="#logo"/></svg>ShinkaLife</div><a href="#/dashboard" data-page="dashboard"><svg class="ico" aria-hidden="true"><use href="#i-dash"/></svg><span>Dashboard</span></a><a href="#/planner" data-page="planner"><svg class="ico" aria-hidden="true"><use href="#i-plan"/></svg><span>Planner</span></a><a href="#/calendar" data-page="calendar"><svg class="ico" aria-hidden="true"><use href="#i-cal"/></svg><span>Calendar</span></a><a href="#/quests" data-page="quests"><svg class="ico" aria-hidden="true"><use href="#i-quest"/></svg><span>Quests</span></a><a href="#/character" data-page="character"><svg class="ico" aria-hidden="true"><use href="#i-char"/></svg><span>Character</span></a><a href="#/progress" data-page="progress"><svg class="ico" aria-hidden="true"><use href="#i-prog"/></svg><span>Progress</span></a><div class="spacer"></div><a href="#/settings" data-page="settings"><svg class="ico" aria-hidden="true"><use href="#i-set"/></svg><span>Settings</span></a></nav>
+<main><div class="banner msg err" id="db-banner" hidden role="alert"></div><div class="banner" id="mock-banner" hidden role="status"><strong>SAMPLE DATA.</strong> Stored in memory only, not in any account, and lost when you reload. Nothing here is real.</div><div class="banner" id="preview-banner" hidden>Preview mode: nothing is saved to an account. Appearance is stored on this device only.</div>
+<section id="page-dashboard"><header class="hero"><div><p class="eyebrow" id="date-line"></p><h1 id="greeting">Welcome</h1>
+<p class="lede">Your command centre. Missions, XP and deadlines appear here as you build them.</p>
+<div class="hero-actions"><a class="btn" href="#/quests">Start a quest</a><a class="btn ghost" href="#/planner">Plan my week</a></div></div>
+<aside class="sigil-wrap" aria-label="Character level"><div class="sigil"><svg viewBox="0 0 120 120" aria-hidden="true"><circle class="ring-bg" cx="60" cy="60" r="52"/><circle id="ring" class="ring" cx="60" cy="60" r="52" pathLength="100" stroke-dasharray="0 100"/></svg><div class="sigil-n"><small>LEVEL</small><b id="lvl">1</b></div></div>
+<p class="muted small" id="lvl-note">Level 1 · 0 XP</p></aside></header>
+<div id="dash-dyn"><p class="muted">Loading…</p></div></section>
+<section id="page-settings" hidden><h1>Settings</h1>
+<div class="panel"><h2>Profile</h2><form id="f-prof" novalidate><label for="p-name">Display name</label><input id="p-name" type="text" maxlength="60">
+<label for="p-tz">Timezone</label><select id="p-tz"></select><p style="margin-top:16px"><button class="btn" type="submit" id="p-save">Save profile</button></p></form><div class="msg" id="prof-msg" role="status" aria-live="polite"></div></div>
+<div class="panel"><h2>Appearance</h2><label>Mode</label><div class="presets" id="modes"></div><label>Presets</label><div class="presets" id="presets"></div>
+<label>Background</label><div class="swatches" id="bgs"></div><label>Accent</label><div class="swatches" id="accents"></div>
+<div class="row"><div><label for="c-bg">Custom background</label><input id="c-bg" type="color"></div><div><label for="c-ac">Custom accent</label><input id="c-ac" type="color"></div></div>
+<label class="check"><input type="checkbox" id="c-motion"> Reduce motion</label>
+<p class="muted" style="margin-top:16px">Text and surfaces adjust automatically so everything stays readable.</p>
+<button class="btn ghost" id="c-reset">Reset to default</button><div class="msg" id="theme-msg" role="status" aria-live="polite"></div></div>
+<div id="set-dyn"></div>
+<div class="panel"><h2>Account</h2><button class="btn ghost" id="btn-out">Log out</button><p class="muted" style="margin-top:16px">Data export and account deletion arrive in a later phase.</p></div></section>
+<section id="page-quests" hidden><p class="eyebrow">Missions</p><h1>Quests</h1>
+<p class="lede">Main quests move your big goals. Side quests are one-offs. Habits repeat. XP rewards connect once the XP ledger ships (Phase 4).</p>
+<div id="q-guest" hidden><p class="muted">Quests are saved to your account. Log in (or finish the Supabase setup) to use them.</p></div>
+<div id="q-app"><form id="q-add" class="panel" novalidate aria-label="Add a quest"><div class="addrow">
+<div style="flex:3 1 220px"><label for="q-title">New quest</label><input id="q-title" type="text" maxlength="120" placeholder="What needs doing?"></div>
+<div><label for="q-type">Type</label><select id="q-type"><option value="side">Side quest</option><option value="main">Main quest</option><option value="habit">Habit</option></select></div>
+<div><label for="q-pri">Priority</label><select id="q-pri"><option value="1">Low</option><option value="2" selected>Normal</option><option value="3">High</option></select></div></div>
+<div class="addrow"><div><label for="q-due">Due</label><input id="q-due" type="datetime-local"></div><div><label for="q-est">Estimate (min)</label><input id="q-est" type="number" min="5" max="1440"></div>
+<div><label for="q-cat">Category</label><select id="q-cat"></select></div><div><label for="q-catname">New category</label><input id="q-catname" type="text" maxlength="40"></div>
+<div style="flex:0 0 auto"><button class="btn ghost" type="button" id="q-newcat">Add category</button></div></div>
+<p style="margin-top:16px"><button class="btn" type="submit">Add quest</button></p></form>
+<div class="addrow"><div style="flex:2 1 200px"><label for="qf-q">Search</label><input id="qf-q" type="search"></div>
+<div><label for="qf-status">Show</label><select id="qf-status"><option value="active">Active</option><option value="done">Completed</option><option value="all">All</option></select></div>
+<div><label for="qf-cat">Category</label><select id="qf-cat"></select></div></div>
+<div class="msg" id="q-msg" role="status" aria-live="polite"></div>
+<ol id="q-list" class="qlist"></ol><p id="q-empty" class="muted" hidden></p></div></section><section id="page-calendar" hidden><p class="eyebrow">Schedule</p><h1>Calendar</h1><div id="cal-root"></div></section>
+<section id="page-planner" hidden><p class="eyebrow">Planner</p><h1>Planner</h1><div id="plan-root"></div></section>
+<section id="page-character" hidden><div id="char-root"></div></section>
+<section id="page-progress" hidden><p class="eyebrow">Progress</p><h1>This week</h1><div id="prog-root"></div></section></main></div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<script type="module" src="js/app.js"></script></body></html>

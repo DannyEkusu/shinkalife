@@ -1,0 +1,7 @@
+{
+  "_comment": "TEMPLATE, NOT A WORKING BUILD. Copy to capacitor.config.json after `npm i @capacitor/core @capacitor/cli @capacitor/android` and replace every TODO. See docs/ANDROID.md.",
+  "appId": "TODO.com.yourdomain.shinkalife",
+  "appName": "ShinkaLife",
+  "webDir": "site",
+  "server": { "androidScheme": "https" }
+}
