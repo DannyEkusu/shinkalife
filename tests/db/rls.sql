@@ -1,16 +1,17 @@
 \set ON_ERROR_STOP on
 \set QUIET on
-create role anon nologin; create role authenticated nologin;
+create role anon nologin; create role authenticated nologin; create role service_role nologin;
 create schema auth;
 create table auth.users (id uuid primary key default gen_random_uuid(), raw_user_meta_data jsonb default '{}'::jsonb);
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
-grant usage on schema auth, public to anon, authenticated;
+grant usage on schema auth, public to anon, authenticated; grant usage on schema public to service_role;
 alter default privileges in schema public grant all on tables to anon, authenticated;
 alter default privileges in schema public grant execute on functions to anon, authenticated;  -- mimics Supabase defaults, so our explicit REVOKEs are really tested
 \i :root/supabase/migrations/0001_profiles_preferences.sql
 \i :root/supabase/migrations/0002_categories_tasks_subtasks.sql
 \i :root/supabase/migrations/0003_calendar_planner_reminders.sql
 \i :root/supabase/migrations/0004_xp_ledger.sql
+\i :root/supabase/migrations/0006_assistant_reminders_ai_usage.sql
 create schema t; grant usage on schema t to public;
 create table t.ids (k text, v uuid); grant all on t.ids to public;
 create function t.ok(n text, c boolean) returns void language plpgsql as $$ begin if c then raise notice 'PASS  %', n; else raise exception 'FAIL  %', n; end if; end $$;
@@ -77,3 +78,4 @@ select t.ok('deleting a user cascades all their data', (select count(*) from pub
 
 \i :root/tests/db/rls2.sql
 \i :root/tests/db/rls3.sql
+\i :root/tests/db/rls4.sql

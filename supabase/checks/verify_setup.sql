@@ -10,7 +10,8 @@ from (values
   ('0002','table','categories'),('0002','table','tasks'),('0002','table','subtasks'),
   ('0003','table','availability'),('0003','table','events'),('0003','table','event_exceptions'),('0003','table','schedule_blocks'),
   ('0003','table','planner_drafts'),('0003','table','reminder_settings'),('0003','table','push_subscriptions'),('0003','table','weekly_reviews'),
-  ('0004','table','xp_ledger'),('0004','table','achievements_unlocked'),('0004','function','award_task_xp(uuid)')
+  ('0004','table','xp_ledger'),('0004','table','achievements_unlocked'),('0004','function','award_task_xp(uuid)'),
+  ('0006','table','reminders'),('0006','table','ai_usage'),('0006','function','ai_consume(uuid,integer)')
 ) as t(migration, kind, name)
 order by t.migration, t.kind, t.name;
 
@@ -30,3 +31,14 @@ select has_function_privilege('anon', 'public.award_task_xp(uuid)', 'execute') a
 -- QUERY 5 (after 0001 + 0005): accounts that still have no profile row (expect 0)
 select count(*) as accounts_without_profile
 from auth.users u left join public.profiles p on p.id = u.id where p.id is null;
+
+-- QUERY 6 (after 0006): the new columns exist? expect exactly 3 rows (assistant_name, ai_opt_in, muted_categories)
+select table_name, column_name from information_schema.columns
+where table_schema = 'public' and ((table_name = 'preferences' and column_name in ('assistant_name', 'ai_opt_in')) or (table_name = 'reminder_settings' and column_name = 'muted_categories'))
+order by 1, 2;
+
+-- QUERY 7 (after 0006): who may run the AI usage counter? expect anon_can_run = false, signed_in_can_run = false, server_can_run = true
+-- (Query 3 will show ai_usage with 0 policies. That is correct: RLS on + no policy = nobody but the server can touch it.)
+select has_function_privilege('anon', 'public.ai_consume(uuid,integer)', 'execute') as anon_can_run,
+       has_function_privilege('authenticated', 'public.ai_consume(uuid,integer)', 'execute') as signed_in_can_run,
+       has_function_privilege('service_role', 'public.ai_consume(uuid,integer)', 'execute') as server_can_run;

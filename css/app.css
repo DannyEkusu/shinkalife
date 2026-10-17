@@ -90,3 +90,10 @@ details.panel summary{cursor:pointer;font-weight:600;min-height:44px;display:fle
 .avrow{align-items:center}.avrow>*{flex:1 1 90px}.toast{position:fixed;left:50%;bottom:calc(80px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--surface-2);color:var(--text);border:1px solid var(--accent);padding:10px 16px;z-index:20;max-width:90vw}
 #mock-banner{border-color:var(--text);position:sticky;top:0;z-index:6}
 @media (max-width:720px){.cal-cell{min-height:64px}.cal-grid{min-width:560px}}
+
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.links a{display:inline-flex;align-items:center;min-height:44px;font-weight:600}
+.due{display:flex;flex-direction:column;gap:6px;padding:var(--s-3);border:1px solid var(--border);border-left:4px solid var(--accent);margin-bottom:var(--s-2);background:var(--surface-2)}
+.cats{border:1px solid var(--border);padding:var(--s-3);margin:var(--s-3) 0}.cats label{margin:4px 0}.notif{margin:var(--s-3) 0}
+.assistant .banner{margin-top:var(--s-3)}.remrow{display:flex;flex-wrap:wrap;gap:var(--s-2);align-items:center;justify-content:space-between;padding:var(--s-2) 0;border-bottom:1px solid var(--border)}
+@media (max-width:720px){nav.side a{font-size:.56rem;padding:6px 0;min-width:0}nav.side a span{overflow:hidden;text-overflow:ellipsis;max-width:100%}}

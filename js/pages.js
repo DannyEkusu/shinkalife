@@ -3,8 +3,12 @@ import { repo } from './repo.js';
 import { h, $, fmtTime, fmtDay, toInput, fromInput, dayStart, minToInput, inputToMin, note, failure, needData, toast } from './ui.js';
 import { localParts } from './recur-core.js';
 import * as N from './notify.js';
+import { CONFIG } from './config.js';
+import { DEFAULT_ASSISTANT_NAME } from './service.js';
+import { KINDS, CATEGORIES, reminderAlerts } from './reminders-core.js';
 const DAY = 864e5, svc = () => state.svc;
 const guard = (root, fn) => async () => { try { await fn(); } catch (e) { failure(root, e, guard(root, fn)); } };
+const aiLabel = () => CONFIG.AI_PROVIDER_LABEL || 'an AI provider';
 const tag = (t, c = '') => h('span', { class: 'tag ' + c }, t);
 
 // ---------- Dashboard ----------
@@ -27,7 +31,10 @@ export async function dashboard() {
             h('div', {}, h('label', { for: 'dq' }, 'Quick add'), h('input', { id: 'dq', type: 'text', maxlength: '120', placeholder: 'A new quest…' })), h('button', { class: 'btn', type: 'submit' }, 'Add'))),
         h('aside', { class: 'col-side' }, h('h2', { class: 'eyebrow' }, 'Deadlines'),
           d.deadlines.length ? h('ul', { class: 'plain' }, d.deadlines.slice(0, 6).map(t => h('li', {}, h('strong', {}, t.title), h('br'), h('span', { class: 'small ' + (t.pastDue ? 'due-past' : 'muted') }, (t.pastDue ? 'Past due · ' : 'Due ') + fmtDay(Date.parse(t.due_at), tz) + ' ' + fmtTime(Date.parse(t.due_at), tz))))) : h('p', { class: 'muted' }, 'No deadlines in the next 7 days.'),
-          h('h2', { class: 'eyebrow' }, 'Reminders (next 24h)'), d.reminders.length ? h('ul', { class: 'plain' }, d.reminders.map(r => h('li', {}, `${fmtTime(r.at, tz)} · ${r.title}`))) : h('p', { class: 'muted' }, 'None upcoming. Reminders appear while the app is open.'),
+          h('h2', { class: 'eyebrow' }, 'Reminders'),
+          d.due.length ? h('div', {}, d.due.map(a => dueCard(a, tz, dashboard))) : null,
+          d.reminders.length ? h('ul', { class: 'plain' }, d.reminders.map(r => h('li', {}, `${fmtTime(r.at, tz)} · ${r.title}`))) : (d.due.length ? null : h('p', { class: 'muted' }, 'Nothing due. Reminders appear here, and as notifications while ShinkaLife is open.')),
+          h('p', { class: 'small' }, h('a', { href: '#/reminders' }, 'Manage reminders')),
           h('p', { class: 'muted small' }, `${d.openCount} open quest${d.openCount === 1 ? '' : 's'}`))));
   })();
 }
@@ -107,7 +114,9 @@ function addForms(tz) {
 let cur = null, alts = [];
 export async function planner() {
   const root = $('#plan-root'); if (!svc()) return needData(root);
-  root.replaceChildren(h('form', { class: 'panel', id: 'pf', onsubmit: e => { e.preventDefault(); gen($('#pt').value); } }, h('label', { for: 'pt' }, 'Describe what you need to do'),
+  let a, ci; try { [a, ci] = await Promise.all([svc().assistant(), svc().checkin()]); } catch (e) { return failure(root, e, planner); }
+  state.assistantName = a.name; $('#plan-title').textContent = `Ask ${a.name}`;
+  root.replaceChildren(assistantPanel(a, ci), h('form', { class: 'panel', id: 'pf', onsubmit: e => { e.preventDefault(); gen($('#pt').value); } }, h('label', { for: 'pt' }, 'Describe what you need to do'),
     h('textarea', { id: 'pt', rows: '4', maxlength: '2000', placeholder: 'e.g. Maths test on Thursday, practise drawing three times this week, Sunday music session at 3pm, work on my website' }),
     h('p', { class: 'addrow' }, h('button', { class: 'btn', type: 'submit' }, 'Generate proposal'), h('button', { class: 'btn ghost', type: 'button', onclick: recover }, 'Recover missed sessions')),
     h('p', { class: 'muted small' }, 'Uses your available hours, fixed commitments and deadlines. Nothing is saved to your schedule until you approve it.')), h('div', { id: 'plan-out' }));
@@ -171,24 +180,100 @@ const DAYN = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 
 export async function settingsExtras() {
   const root = $('#set-dyn'); if (!svc()) { needData(root); return; }
   await guard(root, async () => {
-    const av = await svc().getAvailability(), rs = await svc().reminderSettings(), by = d => av.find(a => a.weekday === d);
+    const av = await svc().getAvailability(), rs = await svc().reminderSettings(), as = await svc().assistant(), by = d => av.find(a => a.weekday === d);
     const row = d => { const a = by(d); return h('div', { class: 'addrow avrow' }, h('label', { class: 'check', for: `av-on-${d}` }, h('input', { id: `av-on-${d}`, type: 'checkbox', checked: !!a }), DAYN[d]), h('input', { type: 'time', id: `av-s-${d}`, 'aria-label': `${DAYN[d]} start`, value: minToInput(a?.start_min ?? 540) }), h('input', { type: 'time', id: `av-e-${d}`, 'aria-label': `${DAYN[d]} end`, value: minToInput(a?.end_min ?? 1020) })); };
-    root.replaceChildren(h('div', { class: 'panel' }, h('h2', {}, 'Available hours'), h('p', { class: 'muted' }, 'The planner only places work inside these windows (your timezone). Leave a day unticked for rest.'), [1, 2, 3, 4, 5, 6, 0].map(row),
+    root.replaceChildren(assistantPanel(as, null, true), h('div', { class: 'panel' }, h('h2', {}, 'Available hours'), h('p', { class: 'muted' }, 'The planner only places work inside these windows (your timezone). Leave a day unticked for rest.'), [1, 2, 3, 4, 5, 6, 0].map(row),
       h('p', { class: 'addrow' }, h('button', { class: 'btn', type: 'button', onclick: async () => { try { const rows = []; for (let d = 0; d < 7; d++) if ($(`#av-on-${d}`).checked) rows.push({ weekday: d, start_min: inputToMin($(`#av-s-${d}`).value), end_min: inputToMin($(`#av-e-${d}`).value) }); await svc().saveAvailability(rows); note($('#av-msg'), 'Available hours saved.', true); } catch (e) { note($('#av-msg'), e.message); } } }, 'Save available hours')), h('div', { id: 'av-msg', class: 'msg', role: 'status' })),
       h('div', { class: 'panel' }, h('h2', {}, 'Reminders'), h('p', { class: 'muted' }, 'In-app reminders appear while ShinkaLife is open. Browser notifications work while a tab or the installed app is running. Reminders when the app is closed need server push, which isn’t set up yet.'),
         h('label', { class: 'check' }, h('input', { id: 'rm-on', type: 'checkbox', checked: rs.enabled }), 'Reminders on'),
         h('div', { class: 'addrow' }, h('div', {}, h('label', { for: 'rm-lead' }, 'Remind me (minutes before)'), h('input', { id: 'rm-lead', type: 'number', min: '0', max: '1440', value: rs.lead_minutes })), h('div', {}, h('label', { for: 'rm-qs' }, 'Quiet from'), h('input', { id: 'rm-qs', type: 'time', value: minToInput(rs.quiet_start_min) })), h('div', {}, h('label', { for: 'rm-qe' }, 'Quiet until'), h('input', { id: 'rm-qe', type: 'time', value: minToInput(rs.quiet_end_min) })), h('div', {}, h('label', { for: 'rm-max' }, 'Max per day'), h('input', { id: 'rm-max', type: 'number', min: '1', max: '50', value: rs.max_per_day }))),
-        h('p', { class: 'muted small' }, rs.paused_until && Date.parse(rs.paused_until) > Date.now() ? `Paused until ${new Date(rs.paused_until).toLocaleString()}.` : 'Not paused.'),
+        catBlock(rs), h('p', { class: 'muted small' }, rs.paused_until && Date.parse(rs.paused_until) > Date.now() ? `Paused until ${new Date(rs.paused_until).toLocaleString()}.` : 'Not paused.'),
         h('p', { class: 'addrow' }, h('button', { class: 'btn', type: 'button', onclick: () => saveRem(rs, null) }, 'Save reminder settings'), h('button', { class: 'btn ghost', type: 'button', onclick: () => saveRem(rs, new Date(Date.now() + DAY).toISOString()) }, 'Pause for 24 hours'), h('button', { class: 'btn ghost', type: 'button', onclick: () => saveRem(rs, 'clear') }, 'Resume')),
-        h('p', { class: 'addrow' }, h('button', { class: 'btn ghost', type: 'button', disabled: N.permission() === 'granted' || !N.supported(), onclick: async () => { const r = await N.request(); note($('#rm-msg'), r === 'granted' ? 'Browser notifications enabled.' : 'Notifications were not enabled. Reminders will still appear inside the app.', r === 'granted'); } }, N.permission() === 'granted' ? 'Browser notifications on' : 'Enable browser notifications'), h('span', { class: 'small muted' }, N.supported() ? '' : 'This browser doesn’t support notifications.')), h('div', { id: 'rm-msg', class: 'msg', role: 'status' })),
+        notifBlock(as.name), h('div', { id: 'rm-msg', class: 'msg', role: 'status' })),
       h('div', { class: 'panel' }, h('h2', {}, 'Your data'), h('p', { class: 'addrow' }, h('button', { class: 'btn ghost', type: 'button', onclick: async () => { try { const blob = new Blob([JSON.stringify(await svc().exportAll(), null, 2)], { type: 'application/json' }), a = h('a', { href: URL.createObjectURL(blob), download: 'shinkalife-export.json' }); a.click(); URL.revokeObjectURL(a.href); } catch (e) { toast(e.message); } } }, 'Export my data (JSON)')),
         h('p', { class: 'muted small' }, 'Account deletion needs a server-side function with elevated permissions, which isn’t set up yet, so it is not offered here. See docs/ARCHITECTURE.md.')));
   })();
 }
-async function saveRem(rs, pause) { try { await svc().saveReminderSettings({ enabled: $('#rm-on').checked, lead_minutes: Number($('#rm-lead').value), quiet_start_min: inputToMin($('#rm-qs').value), quiet_end_min: inputToMin($('#rm-qe').value), max_per_day: Number($('#rm-max').value), paused_until: pause === 'clear' ? null : pause ?? rs.paused_until }); note($('#rm-msg'), 'Saved.', true); if (pause) settingsExtras(); } catch (e) { note($('#rm-msg'), e.message); } }
+async function saveRem(rs, pause) { try { await svc().saveReminderSettings({ enabled: $('#rm-on').checked, lead_minutes: Number($('#rm-lead').value), quiet_start_min: inputToMin($('#rm-qs').value), quiet_end_min: inputToMin($('#rm-qe').value), max_per_day: Number($('#rm-max').value), paused_until: pause === 'clear' ? null : pause ?? rs.paused_until, muted_categories: Object.keys(CATEGORIES).filter(k => !$(`#cat-${k}`).checked) }); note($('#rm-msg'), 'Saved.', true); if (pause) settingsExtras(); } catch (e) { note($('#rm-msg'), e.message); } }
 
-// In-app reminder ticker (only while the app is open)
-const fired = new Set();
-export function startTicker() {
-  setInterval(async () => { if (!svc()) return; try { const d = await svc().dashboard(), now = Date.now(); for (const r of d.reminders) if (r.at <= now && now < r.start && !fired.has(r.key)) { fired.add(r.key); toast(`Starting soon: ${r.title}`); N.show('ShinkaLife', `${r.title} starts at ${fmtTime(r.start, d.tz)}`); } } catch {} }, 30000);
+
+// ---------- assistant ----------
+function assistantPanel(a, ci, settings = false) {
+  if (settings) {
+    const msg = h('div', { id: 'as-msg', class: 'msg', role: 'status', 'aria-live': 'polite' });
+    const save = async raw => { try { const n = await svc().saveAssistantName(raw); state.assistantName = n; $('#as-name').value = n === DEFAULT_ASSISTANT_NAME ? '' : n; note(msg, n === DEFAULT_ASSISTANT_NAME && !String(raw).trim() ? `Name reset to the default (${n}).` : `Saved. Your assistant is now called ${n}.`, true); } catch (e) { note(msg, e.message); } };
+    return h('div', { class: 'panel' }, h('h2', {}, 'Your assistant'), h('p', { class: 'muted' }, 'Choose a name for your ShinkaLife planning assistant. It only personalises the interface: it is software, not a person, and it has no feelings or memory beyond your saved plans.'),
+      h('form', { class: 'addrow', onsubmit: e => { e.preventDefault(); save($('#as-name').value); } }, h('div', {}, h('label', { for: 'as-name' }, 'Assistant name (up to 30 characters)'), h('input', { id: 'as-name', type: 'text', maxlength: '30', placeholder: DEFAULT_ASSISTANT_NAME, autocomplete: 'off', value: a.isDefault ? '' : a.name })),
+        h('button', { class: 'btn', type: 'submit' }, 'Save name'), h('button', { class: 'btn ghost', type: 'button', onclick: () => { $('#as-name').value = ''; save(''); } }, 'Reset to default')),
+      h('p', { class: 'small muted' }, `Planning mode: ${a.aiActive ? 'AI-assisted (on)' : a.aiConfigured ? 'AI available, currently off' : 'rule-based (AI is not set up for this site)'}.`), msg);
+  }
+  const flip = on => async () => { try { await svc().setAiOptIn(on); planner(); } catch (e) { toast(e.message); } };
+  return h('div', { class: 'panel assistant' }, h('p', {}, tag(a.aiActive ? 'AI-assisted' : 'Rule-based', a.aiActive ? 'fixed' : ''), ' ', `Hi, I’m ${a.name}, your ShinkaLife planning assistant. Tell me what you need to get done and I’ll draft a schedule for you to review. Nothing is saved until you approve it.`),
+    a.aiConfigured ? (a.aiOptIn ? h('p', { class: 'small muted' }, `AI is on: the text you type below (not your tasks, calendar or profile) is sent to ${aiLabel()} through this site’s server function. `, h('button', { class: 'btn ghost sm', type: 'button', onclick: flip(false) }, 'Turn off AI'))
+      : h('div', { class: 'banner' }, h('strong', {}, 'Optional: AI assistance (off)'), h('p', {}, `If you turn this on, the text you type in the planner (not your tasks, calendar or profile) is sent to ${aiLabel()} to break it into tasks. Scheduling still happens here. You can turn it off at any time.`), h('button', { class: 'btn', type: 'button', onclick: flip(true) }, 'Turn on AI assistance')))
+      : h('p', { class: 'small muted' }, 'AI isn’t set up for this site yet, so planning uses built-in rules. Turning AI on needs a server function and an AI provider key (see docs/AI_SETUP.md). Nothing is sent anywhere in the meantime.'),
+    ci && (ci.missed || ci.overdue) ? h('p', { class: 'small' }, `Check-in: ${ci.missed} missed session${ci.missed === 1 ? '' : 's'}, ${ci.overdue} task${ci.overdue === 1 ? '' : 's'} past due. That’s okay: `, h('button', { class: 'btn ghost sm', type: 'button', onclick: recover }, 'draft a recovery plan')) : null,
+    h('p', { class: 'small muted' }, `“${a.name}” is the name you chose for this planning tool.`));
 }
+
+// ---------- reminders ----------
+function dueCard(a, tz, reload) {
+  const act = (action, min) => async () => { try { await svc().handleReminder(a, action, min); reload(); } catch (e) { toast(e.message); } };
+  return h('div', { class: 'due' }, h('strong', {}, a.title), h('span', { class: 'small muted' }, `${a.snooze ? 'Snoozed alert' : KINDS[a.kind]} · ${fmtDay(a.at, tz)} ${fmtTime(a.at, tz)}`),
+    h('span', { class: 'addrow' }, h('button', { class: 'btn sm', type: 'button', onclick: act('done') }, 'Done'), h('button', { class: 'btn ghost sm', type: 'button', onclick: act('snooze', 10) }, 'Snooze 10 min'), h('button', { class: 'btn ghost sm', type: 'button', onclick: act('snooze', 60) }, 'Snooze 1 hour'), h('button', { class: 'btn ghost sm', type: 'button', onclick: act('dismiss') }, 'Dismiss')));
+}
+function remForm(p, init, tz, tasks, onSave, label) {
+  const f = k => `${p}-${k}`, wd = ms => localParts(ms, tz).wd, msg = h('div', { id: f('msg'), class: 'msg', role: 'status', 'aria-live': 'polite' }), when0 = init.remind_at ? Date.parse(init.remind_at) : Math.ceil((Date.now() + 36e5) / 36e5) * 36e5;
+  const field = (id, lab, input) => h('div', {}, h('label', { for: id }, lab), input), rep = init.rrule ? init.rrule.freq : 'none';
+  return h('form', { class: 'panel', onsubmit: async e => { e.preventDefault(); const at = fromInput($(`#${f('when')}`).value, tz), r = $(`#${f('rep')}`).value;
+      try { await onSave({ title: $(`#${f('title')}`).value, kind: $(`#${f('kind')}`).value, remind_at: isNaN(at) ? '' : new Date(at).toISOString(), notes: $(`#${f('notes')}`).value, task_id: $(`#${f('task')}`).value || null, tz,
+        rrule: r === 'none' ? null : r === 'daily' ? { freq: 'daily' } : { freq: 'weekly', days: [wd(at)] } }); } catch (x) { note(msg, x.message); } } },
+    h('div', { class: 'addrow' }, field(f('title'), 'What should I remind you about?', h('input', { id: f('title'), type: 'text', maxlength: '120', value: init.title || '' })), field(f('kind'), 'Type', h('select', { id: f('kind') }, Object.entries(KINDS).map(([k, l]) => h('option', { value: k, selected: k === (init.kind || 'custom') }, l))))),
+    h('div', { class: 'addrow' }, field(f('when'), `When (${tz})`, h('input', { id: f('when'), type: 'datetime-local', value: toInput(when0, tz) })), field(f('rep'), 'Repeat', h('select', { id: f('rep') }, ['none', 'daily', 'weekly'].map(o => h('option', { value: o, selected: o === rep }, o === 'none' ? 'Does not repeat' : o[0].toUpperCase() + o.slice(1))))),
+      field(f('task'), 'Linked quest (optional)', h('select', { id: f('task') }, h('option', { value: '' }, 'None'), tasks.filter(t => t.status !== 'done').map(t => h('option', { value: t.id, selected: t.id === init.task_id }, t.title))))),
+    field(f('notes'), 'Notes (optional)', h('textarea', { id: f('notes'), rows: '2', maxlength: '500', value: init.notes || '' })), h('p', { class: 'addrow' }, h('button', { class: 'btn', type: 'submit' }, label), init.id ? h('button', { class: 'btn ghost', type: 'button', onclick: () => reminders() }, 'Cancel') : null), msg);
+}
+let editing = null, showDone = false;
+export async function reminders() {
+  const root = $('#rem-root'); if (!svc()) return needData(root);
+  await guard(root, async () => {
+    const tz = (await repo.getProfile()).timezone || 'UTC', [all, due, up, tasks, rs] = await Promise.all([svc().listReminders(), svc().dueReminders(), svc().upcomingReminders(7), repo.listTasks(), svc().reminderSettings()]), muted = new Set(rs.muted_categories || []), now = Date.now(); state.tz = tz;
+    const shown = all.filter(r => showDone || r.status === 'active'), dueIds = new Set(due.map(d => d.reminder_id));
+    const status = r => r.status !== 'active' ? (r.status === 'done' ? 'Done' : 'Dismissed') : muted.has(CATEGORY(r.kind)) ? 'Muted in Settings' : dueIds.has(r.id) ? 'Due now' : (() => { const n = reminderAlerts(r, now, now + 400 * DAY)[0]; return n ? `Next: ${fmtDay(n.at, tz)} ${fmtTime(n.at, tz)}` : 'No upcoming alert'; })();
+    root.replaceChildren(!rs.enabled ? h('p', { class: 'banner' }, 'Reminders are switched off in Settings. They are saved, but no alerts will show.') : null,
+      due.length ? h('div', { class: 'panel' }, h('h2', {}, 'Due now'), due.map(a => dueCard(a, tz, reminders))) : null,
+      h('details', { class: 'panel', open: !all.length }, h('summary', {}, 'New reminder'), remForm('nr', {}, tz, tasks, async v => { await svc().createReminder(v); toast('Reminder saved'); reminders(); }, 'Save reminder')),
+      h('h2', { class: 'eyebrow' }, 'Next 7 days'), up.length ? h('ul', { class: 'plain' }, up.map(a => h('li', {}, `${fmtDay(a.at, tz)} ${fmtTime(a.at, tz)} · ${a.title}`))) : h('p', { class: 'muted' }, 'Nothing coming up.'),
+      h('div', { class: 'addrow', style: 'margin-top:24px' }, h('h2', { class: 'eyebrow', style: 'flex:1' }, 'All reminders'), h('label', { class: 'check' }, h('input', { type: 'checkbox', id: 'rem-showdone', checked: showDone, onchange: e => { showDone = e.target.checked; reminders(); } }), 'Show finished')),
+      shown.length ? h('div', {}, shown.map(r => editing === r.id ? remForm('er', r, tz, tasks, async v => { await svc().updateReminder(r.id, v); editing = null; toast('Reminder updated'); reminders(); }, 'Save changes')
+        : h('div', { class: 'remrow' }, h('span', {}, h('strong', {}, r.title), ' ', tag(KINDS[r.kind]), r.rrule ? tag('Repeats ' + r.rrule.freq) : null, h('br'), h('span', { class: 'small muted' }, status(r))),
+          h('span', { class: 'addrow' }, h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { editing = r.id; reminders(); } }, 'Edit'), h('button', { class: 'btn ghost sm', type: 'button', 'aria-label': `Delete ${r.title}`, onclick: async () => { if (confirm(`Delete “${r.title}”?`)) { try { await svc().deleteReminder(r.id); editing = null; reminders(); } catch (e) { toast(e.message); } } } }, 'Delete')))))
+        : h('p', { class: 'muted' }, 'No reminders yet. Add one above: a deadline, a study session, a habit.'));
+  })();
+}
+const CATEGORY = k => ({ task: 'task', deadline: 'task', study: 'session', habit: 'habit', activity: 'event', custom: 'custom' })[k];
+
+// ---------- notifications (settings) ----------
+function notifBlock(name) {
+  const st = N.permission(), label = { unsupported: 'not supported by this browser', default: 'off', granted: 'allowed', denied: 'blocked in your browser' }[st];
+  const info = { unsupported: 'Reminders still appear inside ShinkaLife while it is open.', default: 'Press “Enable notifications” to let ShinkaLife show system notifications. Your browser will ask you to confirm.',
+    granted: 'They appear while ShinkaLife is open in a browser tab or as an installed app. They will NOT arrive while it is closed: that would need a server push service, which isn’t set up.', denied: 'To turn them on, open your browser’s site settings (the icon next to the address), set Notifications to Allow, then reload. Reminders still appear inside ShinkaLife.' }[st];
+  return h('div', { class: 'notif' }, h('p', {}, h('strong', {}, 'System notifications: '), label), h('p', { class: 'small muted' }, info),
+    h('p', { class: 'addrow' }, st === 'default' ? h('button', { class: 'btn', type: 'button', onclick: async () => { const r = await N.request(); settingsExtras().then(() => note($('#rm-msg'), r === 'granted' ? 'System notifications enabled.' : 'Not enabled. Reminders will still appear inside ShinkaLife.', r === 'granted')); } }, 'Enable notifications') : null,
+      st === 'granted' ? h('button', { class: 'btn ghost', type: 'button', onclick: async () => { const ok = await N.show(name, 'This is a test notification from ShinkaLife.'); note($('#rm-msg'), ok ? 'Test sent. Check your system notifications.' : 'Couldn’t show a system notification. Reminders still appear inside ShinkaLife.', ok); } }, 'Send a test notification') : null));
+}
+function catBlock(rs) { const muted = new Set(rs.muted_categories || []); return h('fieldset', { class: 'cats' }, h('legend', { class: 'small' }, 'Remind me about'), Object.entries(CATEGORIES).map(([k, l]) => h('label', { class: 'check', for: `cat-${k}` }, h('input', { id: `cat-${k}`, type: 'checkbox', checked: !muted.has(k) }), l))); }
+
+// ---------- in-app reminder ticker (only while ShinkaLife is open) ----------
+const FIRED = 'shinkalife.fired';
+const firedMap = () => { try { return JSON.parse(localStorage.getItem(FIRED) || '{}'); } catch { return {}; } };
+export async function tick() {
+  if (!svc()) return [];
+  const map = firedMap(), now = Date.now(); for (const k of Object.keys(map)) if (map[k] < now - 3 * DAY) delete map[k];
+  const today = new Date().toDateString(), firedToday = Object.values(map).filter(t => new Date(t).toDateString() === today).length;
+  const items = await svc().notificationsDue(new Set(Object.keys(map)), firedToday); if (!state.assistantName) state.assistantName = (await svc().assistant()).name;
+  for (const it of items) { map[it.key] = now; const what = it.source === 'reminder' ? 'Reminder' : 'Starting soon'; toast(`${state.assistantName}: ${what}: ${it.title}`); N.show(`${state.assistantName} · ${what}`, it.title); }
+  try { localStorage.setItem(FIRED, JSON.stringify(map)); } catch {}
+  return items;
+}
+export function startTicker() { setInterval(() => tick().catch(() => {}), 30000); }

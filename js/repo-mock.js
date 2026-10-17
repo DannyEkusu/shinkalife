@@ -5,7 +5,7 @@ import { localParts, zonedToUtc, dateKey } from './recur-core.js';
 const fail = m => { throw new Error(m); };
 export function createMockRepo({ clock = Date.now, tz = 'UTC', seed = true } = {}) {
   let n = 0; const id = () => `mock-${++n}`, iso = () => new Date(clock()).toISOString();
-  const db = { cats: [], tasks: [], subs: [], events: [], exc: [], blocks: [], avail: [], rem: null, ledger: [], ach: new Set(), drafts: [], reviews: new Map(), profile: { display_name: 'Sample user', timezone: tz } };
+  const db = { prefs: { assistant_name: null, ai_opt_in: false }, reminders: [], cats: [], tasks: [], subs: [], events: [], exc: [], blocks: [], avail: [], rem: null, ledger: [], ach: new Set(), drafts: [], reviews: new Map(), profile: { display_name: 'Sample user', timezone: tz } };
   const clone = x => JSON.parse(JSON.stringify(x));
   const overlap = (a, b) => Date.parse(a.start_at) < Date.parse(b.end_at) && Date.parse(b.start_at) < Date.parse(a.end_at);
   const checkBlock = (b, selfId) => { if (!(Date.parse(b.end_at) > Date.parse(b.start_at))) fail('block must end after it starts');
@@ -28,7 +28,7 @@ export function createMockRepo({ clock = Date.now, tz = 'UTC', seed = true } = {
     addBlocks: async rows => { const snapshot = [...db.blocks], out = []; try { for (const x of rows) { const b = { id: id(), status: 'planned', source: 'manual', task_id: null, ...x }; checkBlock(b); db.blocks.push(b); out.push(b); } } catch (e) { db.blocks = snapshot; throw e; } return clone(out); },
     updateBlock: async (bid, v) => { const b = db.blocks.find(x => x.id === bid); const next = { ...b, ...v }; checkBlock(next, bid); Object.assign(b, v); }, deleteBlock: async bid => { db.blocks = db.blocks.filter(b => b.id !== bid); },
     getAvailability: async () => clone(db.avail), setAvailability: async rows => { db.avail = clone(rows); },
-    getReminderSettings: async () => clone(db.rem), saveReminderSettings: async v => { db.rem = { ...db.rem, ...clone(v) }; },
+    getReminderSettings: async () => clone(db.rem), saveReminderSettings: async v => { if (v.muted_categories && !v.muted_categories.every(c => ['session', 'event', 'task', 'habit', 'custom'].includes(c))) fail('unknown reminder category'); db.rem = { ...db.rem, ...clone(v) }; },
     listLedger: async () => clone([...db.ledger].reverse()), listAchievements: async () => [...db.ach],
     awardTaskXp: async tid => { const t = db.tasks.find(x => x.id === tid); if (!t) fail('task not found'); if (t.status !== 'done' || !t.completed_at) fail('task is not completed');
       const total = () => db.ledger.reduce((a, l) => a + l.xp, 0);
@@ -39,6 +39,13 @@ export function createMockRepo({ clock = Date.now, tz = 'UTC', seed = true } = {
       return { awarded: true, xp, total_xp: total(), level: levelFromXp(total()).level }; },
     saveDraft: async d => { const x = { id: id(), ...clone(d) }; db.drafts.push(x); return { id: x.id }; }, updateDraft: async (did, status) => { db.drafts.find(d => d.id === did).status = status; },
     getReview: async w => db.reviews.get(w) ?? '', saveReview: async (w, notes) => { db.reviews.set(w, notes); },
+    getAssistantPrefs: async () => clone(db.prefs),
+    saveAssistantPrefs: async v => { if ('assistant_name' in v && v.assistant_name !== null && !(v.assistant_name.length >= 1 && v.assistant_name.length <= 30 && v.assistant_name === v.assistant_name.trim() && !/[\u0000-\u001f\u007f<>&"`]/.test(v.assistant_name))) fail('invalid assistant name'); Object.assign(db.prefs, v); },
+    listReminders: async () => clone([...db.reminders].sort((a, b) => Date.parse(a.remind_at) - Date.parse(b.remind_at))),
+    addReminder: async v => { if (!v.title || v.title.length > 120) fail('invalid title'); if (v.task_id && !db.tasks.some(t => t.id === v.task_id)) fail('violates foreign key (task not yours)');
+      const r = { id: id(), status: 'active', skip_until: null, snoozed_until: null, notes: null, task_id: null, rrule: null, created_at: iso(), ...v }; db.reminders.push(r); return clone(r); },
+    updateReminder: async (rid, v) => { const r = db.reminders.find(x => x.id === rid); if (r) Object.assign(r, v); },
+    deleteReminder: async rid => { db.reminders = db.reminders.filter(r => r.id !== rid); },
     _db: db,
   };
   if (seed) { // realistic sample data, relative to "now"; clearly labelled as sample in the UI

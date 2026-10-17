@@ -35,4 +35,11 @@ export const supabaseRepo = {
   updateDraft: (id, status) => patchOnly('planner_drafts', id, { status }),
   async getReview(week) { return (await run(sb.from('weekly_reviews').select('notes').eq('week_start', week).maybeSingle()))?.notes ?? ''; },
   saveReview: (week_start, notes) => run(sb.from('weekly_reviews').upsert({ week_start, notes }, { onConflict: 'user_id,week_start' })),
+  // assistant name + AI opt-in live in the existing `preferences` row (owner-only RLS); only the changed columns are sent
+  async getAssistantPrefs() { return (await run(sb.from('preferences').select('assistant_name,ai_opt_in').maybeSingle())) ?? { assistant_name: null, ai_opt_in: false }; },
+  saveAssistantPrefs: v => run(sb.from('preferences').upsert(v, { onConflict: 'user_id' })),
+  listReminders: () => run(sb.from('reminders').select('*').order('remind_at').limit(500)),
+  addReminder: v => run(sb.from('reminders').insert(v).select().single()),
+  updateReminder: (id, v) => patchOnly('reminders', id, v),
+  deleteReminder: id => run(sb.from('reminders').delete().eq('id', id)),
 };

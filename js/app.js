@@ -42,15 +42,15 @@ $('#c-ac').onchange = e => change({ accent: e.target.value, preset: 'custom' }, 
 $('#c-motion').onchange = e => change({ reducedMotion: e.target.checked }, true);
 $('#c-reset').onclick = () => change({ ...T.DEFAULT_THEME }, true);
 
-const PAGES = ['dashboard', 'calendar', 'planner', 'quests', 'character', 'progress', 'settings'];
-const LOAD = { dashboard: Pages.dashboard, calendar: Pages.calendar, planner: Pages.planner, quests: () => Quests.show(user), character: Pages.character, progress: Pages.progress, settings: Pages.settingsExtras };
+const PAGES = ['dashboard', 'calendar', 'planner', 'reminders', 'quests', 'character', 'progress', 'settings'];
+const LOAD = { dashboard: Pages.dashboard, calendar: Pages.calendar, planner: Pages.planner, reminders: Pages.reminders, quests: () => Quests.show(user), character: Pages.character, progress: Pages.progress, settings: Pages.settingsExtras };
 function route() {
   const want = (location.hash.match(/^#\/(\w+)/) || [])[1] || 'dashboard', cur = PAGES.includes(want) ? want : 'dashboard';
   for (const p of PAGES) $('#page-' + p).hidden = p !== cur;
   const sec = $('#page-' + cur); sec.classList.remove('page-enter'); void sec.offsetWidth; sec.classList.add('page-enter');
   document.querySelectorAll('nav a').forEach(a => a.dataset.page === cur ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current'));
   $('#date-line').textContent = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-  if (user || state.mock) LOAD[cur]?.(); else for (const r of ['#dash-dyn', '#cal-root', '#plan-root', '#char-root', '#prog-root', '#set-dyn']) $(r)?.replaceChildren();
+  if (user || state.mock) LOAD[cur]?.(); else for (const r of ['#dash-dyn', '#cal-root', '#plan-root', '#rem-root', '#char-root', '#prog-root', '#set-dyn']) $(r)?.replaceChildren();
 }
 addEventListener('hashchange', route);
 
@@ -97,7 +97,7 @@ $('#btn-forgot').onclick = () => { const em = $('#in-email').value.trim(); if (!
 $('#f-rec').onsubmit = e => { e.preventDefault(); const pw = $('#rec-pw').value;
   if (pw.length < 8) return note($('#rec-msg'), 'Password must be at least 8 characters.');
   guard($('#rec-msg'), async () => { await A.updatePassword(pw); note($('#rec-msg'), 'Password updated.', true); setTimeout(async () => { recovering = false; location.hash = '#/dashboard'; const { data } = await A.sb.auth.getSession(); if (data.session) enterApp(data.session); else show('view-auth'); }, 800); }); };
-$('#btn-out').onclick = async () => { if (state.mock) { state.mock = false; setRepo(null, 'none'); state.svc = null; user = null; Quests.reset(); $('#mock-banner').hidden = true; $('#btn-out').textContent = 'Log out'; show('view-setup'); return; } if (preview) { show('view-setup'); return; } try { await A.signOut(); } catch (e) { note($('#theme-msg'), e.message); } };
+$('#btn-out').onclick = async () => { if (state.mock) { state.mock = false; setRepo(null, 'none'); state.svc = null; state.assistantName = null; user = null; Quests.reset(); $('#mock-banner').hidden = true; $('#btn-out').textContent = 'Log out'; show('view-setup'); return; } if (preview) { show('view-setup'); return; } try { await A.signOut(); } catch (e) { note($('#theme-msg'), e.message); } };
 function enterMock() { // explicit, visibly-labelled development mode; never entered automatically after an error
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; setRepo(createMockRepo({ tz }), 'mock'); state.svc = createService(repo, {}); state.mock = true; state.tz = tz; user = { id: 'mock' }; preview = false;
   $('#mock-banner').hidden = false; $('#preview-banner').hidden = true; show('view-app'); $('#p-name').value = 'Sample user'; $('#p-tz').value = tz; $('#p-save').disabled = false; $('#btn-out').textContent = 'Exit sample mode'; greet('Sample user'); renderTheme(); route();
@@ -111,7 +111,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.ser
 if (new URLSearchParams(location.search).get('mock') === '1') enterMock();
 else if (!A.configured) { show('view-setup'); const i = $('#setup-issue'); i.textContent = A.configIssue || (globalThis.supabase ? '' : 'The Supabase library (vendor/supabase.js) failed to load.'); i.hidden = !i.textContent; }
 else {
-  const clearPrivate = () => { for (const s of ['#dash-dyn', '#cal-root', '#plan-root', '#char-root', '#prog-root', '#set-dyn', '#q-list']) $(s)?.replaceChildren(); $('#p-name').value = ''; $('#db-banner').hidden = true; };
+  const clearPrivate = () => { for (const s of ['#dash-dyn', '#cal-root', '#plan-root', '#rem-root', '#char-root', '#prog-root', '#set-dyn', '#q-list']) $(s)?.replaceChildren(); $('#p-name').value = ''; $('#db-banner').hidden = true; };
   A.sb.auth.onAuthStateChange((ev, session) => setTimeout(() => {      // deferred: supabase-js must not be re-entered from inside its own callback
     if (ev === 'PASSWORD_RECOVERY') { recovering = true; return show('view-recovery'); }
     if (session) {
@@ -119,6 +119,6 @@ else {
       if (user && session.user.id === user.id) { user = session.user; return; }   // TOKEN_REFRESHED / USER_UPDATED / duplicate SIGNED_IN: don't reload the whole app
       return enterApp(session);
     }
-    if (!recovering) { user = null; setRepo(null, 'none'); state.svc = null; Quests.reset(); clearPrivate(); show('view-auth'); }   // signed out: wipe private data from the page
+    if (!recovering) { user = null; setRepo(null, 'none'); state.svc = null; state.assistantName = null; Quests.reset(); clearPrivate(); show('view-auth'); }   // signed out: wipe private data from the page
   }, 0));
 }

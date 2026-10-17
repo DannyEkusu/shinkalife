@@ -15,18 +15,18 @@ export function sanitizeAITasks(json) {
   }
   return { ok: true, tasks };
 }
-export function createServerProvider({ endpoint, getToken, fetchImpl = globalThis.fetch, timeoutMs = 15000 }) {
-  return { name: 'server', async proposeTasks(text) {
+export function createServerProvider({ endpoint, getToken, headers = {}, fetchImpl = globalThis.fetch, timeoutMs = 25000 }) {
+  return { name: 'server', async proposeTasks(text, meta = {}) {
     const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), timeoutMs);
-    try { const res = await fetchImpl(endpoint, { method: 'POST', signal: ctl.signal, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await getToken()}` }, body: JSON.stringify({ text }) });
-      if (!res.ok) throw new Error(`AI service returned ${res.status}.`); return await res.json(); }
+    try { const res = await fetchImpl(endpoint, { method: 'POST', signal: ctl.signal, headers: { ...headers, 'Content-Type': 'application/json', Authorization: `Bearer ${await getToken()}` }, body: JSON.stringify({ text, ...meta }) });
+      if (res.status === 429) throw new Error('The daily AI limit has been reached. Rule-based planning is still available.'); if (res.status === 403) throw new Error('AI assistance is turned off for your account.'); if (!res.ok) throw new Error(`AI service returned ${res.status}.`); return await res.json(); }
     catch (e) { throw new Error(e.name === 'AbortError' ? 'The AI service timed out.' : e.message); } finally { clearTimeout(timer); } } };
 }
 export async function planWithAI(text, ctx, provider) {
   if (String(text).length > MAX_INPUT) return { ok: false, error: `Please keep it under ${MAX_INPUT} characters.` };
   if (!provider) return { ok: true, ...buildProposal(text, ctx), aiAvailable: false };
   try {
-    const s = sanitizeAITasks(await provider.proposeTasks(text)); if (!s.ok) throw new Error('AI returned unusable data: ' + s.error);
+    const s = sanitizeAITasks(await provider.proposeTasks(text, { today: new Date(ctx.nowMs).toISOString().slice(0, 10), tz: ctx.tz })); if (!s.ok) throw new Error('AI returned unusable data: ' + s.error);
     return { ok: true, ...proposeFromTasks({ tasks: s.tasks, source: 'ai' }, ctx), aiAvailable: true };
   } catch (e) { return { ok: true, ...buildProposal(text, ctx), aiAvailable: true, aiError: e.message }; }
 }

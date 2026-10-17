@@ -1,5 +1,9 @@
-# Reminders: three separate tiers
-1. **In-app (implemented, tested logic):** toasts while the app is open; policy in `reminders-core.js` (lead time, quiet hours across midnight, daily cap, pause, de-duplication by key). Ticker runs every 30 s.
-2. **Browser notifications (implemented, NOT tested on devices):** `notify.js` uses the Notification API / service-worker `showNotification` after the user taps "Enable". Works only while a tab or installed PWA process is alive. Denied permission is handled: reminders stay in-app.
-3. **Background push (NOT implemented):** requires (a) VAPID keys, (b) a scheduled server job (Supabase Edge Function + pg_cron) that reads `schedule_blocks`/`events`/`reminder_settings`, applies the same quiet-hours/limit policy, de-duplicates, sends Web Push to `push_subscriptions`, records delivery/retry, (c) a client subscribe flow storing the subscription, (d) real-device testing (Android Chrome, installed PWA; iOS needs an installed PWA on 16.4+). Do not advertise background reminders until this is built and tested.
-On Android via Capacitor, prefer `@capacitor/local-notifications` for on-device scheduled reminders (no server) and FCM only if cross-device push is needed.
+# Reminders and notifications: what works today
+| Layer | Status |
+|---|---|
+| **In-app reminders** (Due now cards on Dashboard and Reminders page, toasts) | Implemented. Work while ShinkaLife is open. Tested in automated UI tests. |
+| **System notifications** (browser/OS) | Implemented. Only after the user presses **Enable notifications** (never on page load). Work while ShinkaLife is open in a tab or installed as an app. Not tested on real phones/laptops yet. Blocked/unsupported states are explained in Settings. |
+| **Notifications while the site is CLOSED** (background push) | **Not implemented.** Needs VAPID keys, a push-subscription flow, and a scheduled server job (Supabase Edge Function + cron). Do not rely on it. The `push_subscriptions` table from migration 0003 is reserved for it. |
+Reminders you create are saved in your account (`reminders` table, migration 0006, owner-only RLS): types task, deadline, study, habit, activity, custom; one-off or daily/weekly; times kept in your timezone (wall-clock times survive daylight-saving changes). Actions: done, dismiss, snooze 10 min/1 h, edit (restarts the reminder), delete. Recurring reminders: handling one occurrence leaves the series running; days missed collapse into one "Due now" card.
+Alerts respect: master switch, pause, quiet hours (alerts are held until quiet hours end, not lost), daily maximum, and per-category switches (Settings). Each alert is announced once (remembered on this device for 3 days).
+**Limits to know:** the "already announced" memory and the daily maximum are per device/browser, so two devices open at once can each announce the same reminder. Automatic reminders for planned sessions and calendar events use the same switches.

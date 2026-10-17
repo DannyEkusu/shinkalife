@@ -5,7 +5,13 @@ import { validateSchedule, findConflicts, planRecovery, DEFAULTS } from './sched
 import { planWithAI } from './planner-ai.js';
 import { compareAlternatives, proposeFromTasks } from './planner-core.js';
 import { levelFromXp, skillRank, SKILLS, ACHIEVEMENTS } from './xp-core.js';
-import { applyPolicy, remindersFor, DEFAULT_REMINDER_SETTINGS } from './reminders-core.js';
+import { applyPolicy, remindersFor, DEFAULT_REMINDER_SETTINGS, validateReminder, dueAlerts, upcomingAlerts, CATEGORY_OF, CATEGORIES } from './reminders-core.js';
+export const DEFAULT_ASSISTANT_NAME = 'Shinka';
+export function normalizeAssistantName(raw) {   // null = use the default name
+  const s = String(raw ?? '').replace(/\s+/g, ' ').trim(); if (!s) return null;
+  if (s.length > 30) throw new Error('Names can be up to 30 characters.');
+  if (/[\u0000-\u001f\u007f<>&"`]/.test(s)) throw new Error('Please avoid < > & quotes and backticks in the name.'); return s;
+}
 import { validateTask } from './tasks-core.js';
 const DAY = 864e5, MIN = 60000, iso = ms => new Date(ms).toISOString();
 const toBlock = b => ({ id: b.id, task_id: b.task_id, title: b.title, start: Date.parse(b.start_at), end: Date.parse(b.end_at), status: b.status, source: b.source });
@@ -104,7 +110,8 @@ export function createService(repo, { clock = Date.now, provider = null } = {}) 
 
   // ---------- planner ----------
   S.generateProposal = async text => {
-    const c = await ctx(), res = await planWithAI(String(text || ''), c, provider); if (!res.ok) throw new Error(res.error);
+    const prefs = await repo.getAssistantPrefs(), useProvider = provider && prefs.ai_opt_in ? provider : null;   // the AI service is only used if configured AND the user opted in
+    const c = await ctx(), res = await planWithAI(String(text || ''), c, useProvider); if (!res.ok) throw new Error(res.error);
     const alternatives = res.source === 'rules' ? compareAlternatives(text, c) : [];
     let draft_id = null, draftError = null; try { draft_id = (await repo.saveDraft({ input: String(text).slice(0, 2000), source: res.source, proposal: { blocks: res.blocks, unscheduled: res.unscheduled }, status: 'draft' })).id; } catch (e) { draftError = e.message; }
     return { proposal: { ...res, draft_id, text }, alternatives, draftError };
@@ -152,12 +159,53 @@ export function createService(repo, { clock = Date.now, provider = null } = {}) 
   S.reminderSettings = async () => ({ ...DEFAULT_REMINDER_SETTINGS, ...(await repo.getReminderSettings() || {}) });
   S.saveReminderSettings = async v => {
     const ok = (x, a, b) => Number.isInteger(x) && x >= a && x <= b; if (!ok(v.lead_minutes, 0, 1440) || !ok(v.quiet_start_min, 0, 1439) || !ok(v.quiet_end_min, 0, 1439) || !ok(v.max_per_day, 1, 50)) throw new Error('Reminder settings are out of range.');
-    await repo.saveReminderSettings({ enabled: !!v.enabled, lead_minutes: v.lead_minutes, quiet_start_min: v.quiet_start_min, quiet_end_min: v.quiet_end_min, max_per_day: v.max_per_day, paused_until: v.paused_until || null });
+    if (v.muted_categories && !(Array.isArray(v.muted_categories) && v.muted_categories.every(c => c in CATEGORIES))) throw new Error('Unknown reminder category.');
+    await repo.saveReminderSettings({ enabled: !!v.enabled, lead_minutes: v.lead_minutes, quiet_start_min: v.quiet_start_min, quiet_end_min: v.quiet_end_min, max_per_day: v.max_per_day, paused_until: v.paused_until || null, ...(v.muted_categories ? { muted_categories: v.muted_categories } : {}) });
   };
   S.getAvailability = () => repo.getAvailability();
   S.saveAvailability = async rows => {
     const seen = new Set(); for (const r of rows) { if (!(Number.isInteger(r.weekday) && r.weekday >= 0 && r.weekday <= 6 && Number.isInteger(r.start_min) && Number.isInteger(r.end_min) && r.start_min >= 0 && r.end_min <= 1440 && r.end_min > r.start_min)) throw new Error('Each available window needs a start before its end.'); const k = `${r.weekday}:${r.start_min}`; if (seen.has(k)) throw new Error('Duplicate window.'); seen.add(k); }
     await repo.setAvailability(rows);
+  };
+
+  // ---------- assistant (name + AI opt-in) ----------
+  S.assistant = async () => { const p = await repo.getAssistantPrefs(); return { name: p.assistant_name || DEFAULT_ASSISTANT_NAME, isDefault: !p.assistant_name, aiConfigured: !!provider, aiOptIn: !!p.ai_opt_in, aiActive: !!provider && !!p.ai_opt_in }; };
+  S.saveAssistantName = async raw => { const n = normalizeAssistantName(raw); await repo.saveAssistantPrefs({ assistant_name: n }); return n || DEFAULT_ASSISTANT_NAME; };
+  S.setAiOptIn = async on => { await repo.saveAssistantPrefs({ ai_opt_in: !!on }); };
+  S.checkin = async () => { const nowMs = clock(), [p, tasks] = await Promise.all([S.progress(), repo.listTasks()]); return { missed: p.sessions.missed, overdue: tasks.filter(t => t.status !== 'done' && t.due_at && Date.parse(t.due_at) < nowMs).length }; };
+
+  // ---------- user reminders ----------
+  S.listReminders = () => repo.listReminders();
+  S.createReminder = async input => { const r = validateReminder({ ...input, tz: input.tz || await tz() }); if (!r.ok) throw new Error(r.errors.join(' ')); return repo.addReminder(r.value); };
+  S.updateReminder = async (id, input) => { const r = validateReminder({ ...input, tz: input.tz || await tz() }); if (!r.ok) throw new Error(r.errors.join(' ')); await repo.updateReminder(id, { ...r.value, status: 'active', skip_until: null, snoozed_until: null }); };   // editing the time starts the reminder afresh
+  S.deleteReminder = id => repo.deleteReminder(id);
+  S.handleReminder = async (alert, action, minutes = 10) => {
+    const rem = (await repo.listReminders()).find(r => r.id === alert.reminder_id); if (!rem) throw new Error('That reminder no longer exists.');
+    const skip = Math.max(alert.base || 0, rem.skip_until ? Date.parse(rem.skip_until) : 0), sk = skip > 0 ? iso(skip) : null;
+    if (action === 'snooze') { if (!(Number.isInteger(minutes) && minutes >= 5 && minutes <= 1440)) throw new Error('Snooze for between 5 minutes and 24 hours.'); await repo.updateReminder(rem.id, { skip_until: sk, snoozed_until: iso(clock() + minutes * MIN) }); return; }
+    if (action !== 'done' && action !== 'dismiss') throw new Error('Unknown action.');
+    if (!rem.rrule) await repo.updateReminder(rem.id, { status: action === 'done' ? 'done' : 'dismissed', snoozed_until: null, skip_until: sk });
+    else await repo.updateReminder(rem.id, { skip_until: sk, snoozed_until: null });      // recurring: only this occurrence is handled; the series continues
+  };
+  const mutedSet = rs => new Set(rs.muted_categories || []);
+  S.dueReminders = async () => { const rs = await S.reminderSettings(), muted = mutedSet(rs), all = await repo.listReminders(); return dueAlerts(all, clock()).filter(a => !muted.has(CATEGORY_OF[a.kind])); };
+  async function upcomingMixed(autoItems, rs, zone, nowMs) {
+    const muted = mutedSet(rs), auto = applyPolicy(remindersFor(autoItems.filter(i => !muted.has(i.cat)), rs.lead_minutes), rs, zone, nowMs).send.filter(r => r.at >= nowMs - 60000);
+    const mine = upcomingAlerts(await repo.listReminders(), nowMs, DAY).filter(a => !muted.has(CATEGORY_OF[a.kind])).map(a => ({ key: a.key, title: a.title, at: a.at, start: a.at, cat: CATEGORY_OF[a.kind] }));
+    return [...auto, ...mine].sort((a, b) => a.at - b.at).slice(0, 5);
+  }
+  S.upcomingReminders = async (days = 7) => { const rs = await S.reminderSettings(), muted = mutedSet(rs), nowMs = clock();
+    return upcomingAlerts(await repo.listReminders(), nowMs, days * DAY).filter(a => !muted.has(CATEGORY_OF[a.kind])); };
+  // What should be announced RIGHT NOW (toast / system notification). Respects enabled, pause, quiet hours (deferred, not lost), muted categories, daily cap and de-duplication.
+  S.notificationsDue = async (fired = new Set(), firedToday = 0) => {
+    const nowMs = clock(), zone = await tz(), rs = await S.reminderSettings(); if (!rs.enabled) return [];
+    const muted = mutedSet(rs), items = [];
+    for (const a of await S.dueReminders()) if (a.at > nowMs - 12 * 36e5) items.push({ key: a.key, title: a.title, at: a.at, start: Infinity, source: 'reminder', kind: a.kind });
+    const ahead = await S.calendar(nowMs, nowMs + DAY), lead = rs.lead_minutes * MIN;
+    if (!muted.has('session')) for (const b of ahead.blocks) if (b.status === 'planned' && b.start > nowMs) items.push({ key: `b:${b.id}:${b.start}`, title: b.title, at: b.start - lead, start: b.start, source: 'session' });
+    if (!muted.has('event')) for (const f of ahead.fixed) if (f.start > nowMs) items.push({ key: `e:${f.event_id}:${f.start}`, title: f.title, at: f.start - lead, start: f.start, source: 'event' });
+    const { send } = applyPolicy(items.filter(i => !fired.has(i.key)), rs, zone, nowMs);
+    return send.filter(i => i.at <= nowMs && nowMs < i.start).slice(0, Math.max(0, rs.max_per_day - firedToday));
   };
 
   // ---------- read models for pages ----------
@@ -166,11 +214,11 @@ export function createService(repo, { clock = Date.now, provider = null } = {}) 
     const zone = await tz(), nowMs = clock(), [d0, d1] = dayRange(nowMs, zone), [tasks, ledger, avail, rs] = await Promise.all([repo.listTasks(), repo.listLedger(), repo.getAvailability(), S.reminderSettings()]);
     const open = tasks.filter(t => t.status !== 'done'), cal = await S.calendar(d0, d1), ahead = await S.calendar(nowMs, nowMs + DAY);
     const total = ledger.reduce((a, l) => a + l.xp, 0), dueKey = t => t.due_at && dateKey(localParts(Date.parse(t.due_at), zone)), today = dateKey(localParts(nowMs, zone));
-    const items = [...ahead.blocks.filter(b => b.status === 'planned' && b.start > nowMs).map(b => ({ id: b.id, title: b.title, start: b.start })), ...ahead.fixed.filter(f => f.start > nowMs).map(f => ({ id: `${f.event_id}:${f.date}`, title: f.title, start: f.start }))];
+    const items = [...ahead.blocks.filter(b => b.status === 'planned' && b.start > nowMs).map(b => ({ id: b.id, title: b.title, start: b.start, cat: 'session' })), ...ahead.fixed.filter(f => f.start > nowMs).map(f => ({ id: `${f.event_id}:${f.date}`, title: f.title, start: f.start, cat: 'event' }))];
     return { tz: zone, today: { fixed: cal.fixed, blocks: cal.blocks.filter(b => b.status !== 'skipped'), conflicts: cal.conflicts },
       deadlines: open.filter(t => t.due_at && Date.parse(t.due_at) <= nowMs + 7 * DAY).sort((a, b) => Date.parse(a.due_at) - Date.parse(b.due_at)).map(t => ({ ...t, pastDue: Date.parse(t.due_at) < nowMs })),
       quests: open.filter(t => t.quest_type === 'habit' || (t.due_at && dueKey(t) <= today)), openCount: open.length, xp: levelFromXp(total), availabilityMissing: avail.length === 0,
-      reminders: applyPolicy(remindersFor(items, rs.lead_minutes), rs, zone, nowMs).send.filter(r => r.at >= nowMs - 60000).slice(0, 5) };
+      reminders: await upcomingMixed(items, rs, zone, nowMs), due: await S.dueReminders() };
   };
   S.character = async () => {
     const [ledger, unlocked, tasks] = await Promise.all([repo.listLedger(), repo.listAchievements(), repo.listTasks()]), total = ledger.reduce((a, l) => a + l.xp, 0), got = new Set(unlocked);

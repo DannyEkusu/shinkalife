@@ -1,4 +1,12 @@
-# ShinkaLife status (updated: Supabase integration session)
+# ShinkaLife status (updated: assistant, reminders, notifications, Instagram)
+## Latest session summary
+- **Found:** migration 0006 and its DB tests already existed but NO app code used them. Reviewed and verified 0006 (103 DB checks pass, 34 for 0006) rather than writing a competing migration.
+- **Built:** assistant name + AI opt-in (service, repos, Settings, Planner), real reminders (create/edit/snooze/done/dismiss/delete, recurrence, categories, quiet hours, cap, dedupe) with Reminders page + dashboard cards + in-app ticker + opt-in system notifications, rule-based goal splitting, Planner check-in, Instagram links, AI Edge Function (`supabase/functions/plan`, not deployed), DB self-check extended for 0006.
+- **Fixed:** two dbcheck tests (expectations updated after inspecting them; added a missing-column test); AI task cap counted malformed entries; reminders list rendered as "[object HTMLDivElement]" (caught by UI test).
+- **Tested (run, passing):** `npm test` 120/120; `npm run test:db` 103/103; migrations 0001-0006 + verify_setup.sql on scratch Postgres.
+- **NOT tested:** real Supabase (sign-in, RLS via API, 0006 on your project), the Edge Function against a real provider or deployed, real OS/browser notifications, real phone layout (8-item mobile nav uses small labels: check it on your Android), GitHub Pages deploy of this build.
+- **Not implemented:** background push (site closed), account deletion, AI provider account (needs your approval), recurring tasks/projects.
+## Earlier sections
 ## Diagnosis: "database isn't fully set up" + "Could not find table public.profiles" (15 Oct)
 - **Cause (verified by simulation, not by access to your live project):** migrations were not applied on the project the site points to. The deployed `dbcheck.js` had a bug (HEAD request: supabase-js reports a bodiless 404 as success), so it reported only `award_task_xp()` and hid every missing table. Reproduced: a project with nothing installed gives exactly the two messages in the screenshot with the deployed code, and a correct list of 16 missing objects with the fixed code.
 - **Fixes in this copy:** `js/dbcheck.js` (GET probe), `js/auth.js` (`saveProfile` upserts), `sw.js` (v2 so browsers fetch the new files), migration `0005_backfill_profiles.sql`, `supabase/checks/verify_setup.sql`, tests. Migrations 0001-0004 are unchanged and identical to the ones in the deployed zip.
@@ -33,6 +41,6 @@
 New: migrations 0003, 0004; tests/db/rls2.sql; tests/{engines,flows,ui.smoke,pwa}.test.mjs; js/{recur-core,schedule-core,planner-core,planner-ai,xp-core,reminders-core,repo,repo-supabase,repo-mock,service,state,ui,pages,notify}.js; manifest.webmanifest, sw.js, offline.html, vendor/supabase.js (pinned 2.45.4, MIT), assets/icon-*.png; .github/workflows/pages.yml; android/capacitor.config.template.json; docs/{ARCHITECTURE,NOTIFICATIONS,ANDROID,PRIVACY}.md.
 Edited: index.html, css/app.css, js/{app,quests,config}.js, tests/db/{rls.sql,run.sh}, package.json, README.md. Removed: js/data.js.
 ## Next actions
-1. **You (about 15 minutes):** README > *Connect Supabase*: run migrations 0001-0005 in order (check first with supabase/checks/verify_setup.sql), set Auth URLs, then run the app and do the verification list. Send me any red banner text, error message, or what you saw.
-2. **Me, after your results:** fix whatever the live test reveals, then verify cross-account isolation and XP through the real API.
-3. **Independent work still open:** recurring tasks + projects/milestones (migration 0006; 0005 is the profile backfill), skill tagging UI, drag-and-drop, AI Edge Function (needs your provider decision and approval), real-browser visual QA, decide on the unreferenced duplicate files listed above.
+1. **You:** in Supabase SQL Editor run any missing migrations in order (0001-0006; check with `supabase/checks/verify_setup.sql` query 1 first), copy the update files into your repo, push, then follow the verification list in README. Tell me what happens (errors, screenshots).
+2. **You, only if you want AI:** approve a provider, then follow `docs/AI_SETUP.md`. Nothing sends text to any AI service until you do and each user opts in.
+3. **Me, after your results:** fix live issues; real-device notification and mobile-nav checks; then background push (needs VAPID keys + scheduled function), account deletion function, recurring tasks/projects (migration 0007).

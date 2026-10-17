@@ -33,7 +33,13 @@ export function parsePlan(text, { nowMs, tz }) {
     } else { const est = given ?? (/\b(website|project|build|code)\b/.test(low) ? 90 : 45); if (given == null) assumptions.push(`Assumed ${est} minutes.`);
       tasks.push({ id: `p${n++}`, title, est_minutes: est, due_at: wd != null ? new Date(dayAt(nowMs, tz, wd, 23, 0, today)).toISOString() : null, priority: 2, quest_type: 'side', status: 'todo', assumptions }); }
   }
-  return { tasks, fixed, questions };
+  return { tasks: splitLarge(tasks), fixed, questions };
+}
+// Rule-based goal breakdown: a 4-16 hour task becomes separate parts of about 2 hours, so each step can be completed on its own.
+export function splitLarge(tasks) {
+  return tasks.flatMap(t => { if (t.quest_type === 'habit' || t.est_minutes < 240 || t.est_minutes > 960) return [t];
+    const n = Math.ceil(t.est_minutes / 120), each = Math.ceil(t.est_minutes / n / 5) * 5;
+    return Array.from({ length: n }, (_, i) => ({ ...t, id: `${t.id}-${i + 1}`, title: `${t.title} (part ${i + 1}/${n})`, est_minutes: each, assumptions: [...t.assumptions, `Split into ${n} parts of about ${each} minutes so each step is manageable.`] })); });
 }
 export function proposeFromTasks({ tasks, fixed = [], questions = [], source }, ctx) {
   const busy = [...(ctx.busy || []), ...fixed.map(f => ({ start: f.start, end: f.end }))];
