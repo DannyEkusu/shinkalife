@@ -2,8 +2,9 @@
 // Trust model: the browser may PROPOSE (tasks, blocks, XP claims); the database decides (constraints, RLS, award_task_xp).
 import { expandOccurrences, localParts, dateKey, zonedToUtc } from './recur-core.js';
 import { validateSchedule, findConflicts, planRecovery, DEFAULTS } from './schedule-core.js';
-import { planWithAI } from './planner-ai.js';
-import { compareAlternatives, proposeFromTasks } from './planner-core.js';
+import { planWithAI, askAI } from './planner-ai.js';
+import { compareAlternatives, proposeFromTasks, parsePlan } from './planner-core.js';
+import { detectIntent, looksLikePlan, isBareDirective, extractSubject, breakdownSteps, helpText, scopeText, overviewText, progressText, explainText } from './assistant-local.js';
 import { levelFromXp, skillRank, SKILLS, ACHIEVEMENTS } from './xp-core.js';
 import { applyPolicy, remindersFor, DEFAULT_REMINDER_SETTINGS, validateReminder, dueAlerts, upcomingAlerts, CATEGORY_OF, CATEGORIES } from './reminders-core.js';
 export const DEFAULT_ASSISTANT_NAME = 'Shinka';
@@ -18,7 +19,7 @@ const toBlock = b => ({ id: b.id, task_id: b.task_id, title: b.title, start: Dat
 const over = (a, b) => a.start < b.end && b.start < a.end;
 const say = (list, n = 3) => list.slice(0, n).join(' ');
 
-export function createService(repo, { clock = Date.now, provider = null } = {}) {
+export function createService(repo, { clock = Date.now, provider = null, isOnline = () => globalThis.navigator?.onLine !== false } = {}) {
   const S = {};
   const tz = async () => (await repo.getProfile())?.timezone || 'UTC';
   async function fixedBetween(from, to, zone, skip) {
@@ -100,7 +101,7 @@ export function createService(repo, { clock = Date.now, provider = null } = {}) 
     await repo.updateTask(id, { status: done ? 'done' : 'todo' }); if (!done) return { award: null };
     const nowMs = clock(); let award = null, awardError = null;
     try { award = await repo.awardTaskXp(id); } catch (e) { awardError = e.message; }   // authoritative: the server/database decides if and how much
-    for (const b of (await plannedBlocks(nowMs - 90 * DAY, nowMs + 90 * DAY)).filter(b => b.task_id === id)) await repo.updateBlock(b.id, { status: b.start <= nowMs ? 'done' : 'skipped' });
+    try { for (const b of (await plannedBlocks(nowMs - 90 * DAY, nowMs + 90 * DAY)).filter(b => b.task_id === id)) await repo.updateBlock(b.id, { status: b.start <= nowMs ? 'done' : 'skipped' }); } catch { /* tidying the schedule is best-effort (needs internet); completion and XP are what matter */ }
     return { award, awardError };
   };
   S.claimPendingXp = async () => { // retry awards that failed (offline etc.); idempotent on the server
@@ -110,7 +111,7 @@ export function createService(repo, { clock = Date.now, provider = null } = {}) 
 
   // ---------- planner ----------
   S.generateProposal = async text => {
-    const prefs = await repo.getAssistantPrefs(), useProvider = provider && prefs.ai_opt_in ? provider : null;   // the AI service is only used if configured AND the user opted in
+    const prefs = await repo.getAssistantPrefs(), useProvider = provider && prefs.ai_opt_in && isOnline() ? provider : null;   // offline: never pretend; the local rules answer instead   // the AI service is only used if configured AND the user opted in
     const c = await ctx(), res = await planWithAI(String(text || ''), c, useProvider); if (!res.ok) throw new Error(res.error);
     const alternatives = res.source === 'rules' ? compareAlternatives(text, c) : [];
     let draft_id = null, draftError = null; try { draft_id = (await repo.saveDraft({ input: String(text).slice(0, 2000), source: res.source, proposal: { blocks: res.blocks, unscheduled: res.unscheduled }, status: 'draft' })).id; } catch (e) { draftError = e.message; }
@@ -137,6 +138,7 @@ export function createService(repo, { clock = Date.now, provider = null } = {}) 
     return { ...r.proposal, source: 'rules', kind: 'recovery', markMissed: r.markMissed, tasks: t2, fixed: [], questions: [], validation: validateSchedule({ blocks: r.proposal.blocks, tasks: t2, availability: c.availability, busy: [...await fixedBetween(nowMs, nowMs + 12 * DAY, c.tz)].map(x => ({ start: x.start, end: x.end })), tz: c.tz }) };
   };
   S.approveProposal = async proposal => {
+    if (!isOnline()) throw new Error('Approving a schedule needs an internet connection, so nothing was changed. You can still review proposals offline.');
     const c = await ctx(), replaces = new Set(proposal.replaces || []), blocks = proposal.blocks || [];
     if (!blocks.length && !(proposal.markMissed || []).length) throw new Error('There is nothing to apply.');
     const end = Math.max(...blocks.map(b => b.end), c.nowMs) + DAY, fixedNow = await fixedBetween(c.nowMs - DAY, end, c.tz), planned = await plannedBlocks(c.nowMs - DAY, end, replaces);
@@ -169,10 +171,45 @@ export function createService(repo, { clock = Date.now, provider = null } = {}) 
   };
 
   // ---------- assistant (name + AI opt-in) ----------
-  S.assistant = async () => { const p = await repo.getAssistantPrefs(); return { name: p.assistant_name || DEFAULT_ASSISTANT_NAME, isDefault: !p.assistant_name, aiConfigured: !!provider, aiOptIn: !!p.ai_opt_in, aiActive: !!provider && !!p.ai_opt_in }; };
+  S.assistant = async () => { const p = await repo.getAssistantPrefs(); return { name: p.assistant_name || DEFAULT_ASSISTANT_NAME, isDefault: !p.assistant_name, aiConfigured: !!provider, aiOptIn: !!p.ai_opt_in, aiActive: !!provider && !!p.ai_opt_in, shareData: !!p.ai_share_data, saveHistory: p.chat_history !== false }; };
   S.saveAssistantName = async raw => { const n = normalizeAssistantName(raw); await repo.saveAssistantPrefs({ assistant_name: n }); return n || DEFAULT_ASSISTANT_NAME; };
   S.setAiOptIn = async on => { await repo.saveAssistantPrefs({ ai_opt_in: !!on }); };
   S.checkin = async () => { const nowMs = clock(), [p, tasks] = await Promise.all([S.progress(), repo.listTasks()]); return { missed: p.sessions.missed, overdue: tasks.filter(t => t.status !== 'done' && t.due_at && Date.parse(t.due_at) < nowMs).length }; };
+
+  // ---------- assistant conversation ----------
+  S.setAssistantFlag = async (key, on) => { if (!['ai_share_data', 'chat_history'].includes(key)) throw new Error('Unknown setting.'); await repo.saveAssistantPrefs({ [key]: !!on }); };
+  S.history = async () => { try { if (!(await repo.getAssistantPrefs()).chat_history) return []; return (await repo.listMessages(60)).map(m => ({ role: m.role, source: m.source, text: m.content, at: m.created_at })); } catch { return []; } };
+  S.remember = async (role, source, text) => { try { if (!(await repo.getAssistantPrefs()).chat_history) return false; await repo.addMessage({ role, source: role === 'user' ? 'user' : source, content: String(text).slice(0, 2000) }); return true; } catch { return false; } };   // best effort, needs internet
+  S.clearHistory = () => repo.clearMessages();
+  S.aiContext = async () => { const d = await S.dashboard(), t = ms => new Date(ms).toISOString();   // titles and times only: no notes, emails or profile
+    return { deadlines: d.deadlines.slice(0, 10).map(x => ({ title: x.title, due: x.due_at, est: x.est_minutes || null })), today: [...d.today.fixed.map(f => ({ title: f.title, start: t(f.start), end: t(f.end) })), ...d.today.blocks.map(b => ({ title: b.title, start: t(b.start), end: t(b.end) }))].slice(0, 15) }; };
+  // One user message in, one assistant answer out. Always says WHO answered (source: 'ai' or 'rules'). Never changes data; schedules are proposals the user must approve.
+  S.assistantReply = async (text, { lastProposal = null, history = [] } = {}) => {
+    text = String(text || '').trim(); if (!text) throw new Error('Type a message first.'); if (text.length > 2000) throw new Error('Please keep messages under 2000 characters.');
+    const a = await S.assistant(), online = isOnline(), aiLive = a.aiActive && online, zone = await tz(), nowMs = clock(), intent = detectIntent(text), rules = (t, extra = {}) => ({ text: t, source: 'rules', ...extra });
+    const offNote = a.aiActive && !online ? ' (You’re offline, so the built-in rules are answering. AI resumes when you’re back online.)' : '';
+    const meta = async () => ({ today: new Date(nowMs).toISOString().slice(0, 10), tz: zone, ...(a.shareData ? { context: await S.aiContext() } : {}) });
+    const viaAI = async () => askAI(provider, [...history.slice(-10).map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: String(m.text).slice(0, 1000) })), { role: 'user', content: text.slice(0, 1000) }], await meta());
+    if (intent === 'help') return rules(helpText(a.name, a)); if (intent === 'overview') return rules(overviewText(await S.dashboard())); if (intent === 'progress') return rules(progressText(await S.character())); if (intent === 'explain') return rules(explainText(lastProposal));
+    if (intent === 'recover') { try { const p = await S.previewRecovery(), any = p.blocks.length || p.markMissed.length; return rules(any ? `I found ${p.markMissed.length} missed session${p.markMissed.length === 1 ? '' : 's'}. Here’s a catch-up plan to review; nothing changes until you approve it.` : 'Nothing needs recovering: you have no missed sessions.', any ? { proposal: p } : {}); } catch (e) { return rules(e.message, { error: e.message }); } }
+    if (intent === 'breakdown') {
+      if (aiLive) { const r = await viaAI(); if (r.ok) return { text: r.reply, source: 'ai' }; const { steps } = breakdownSteps(extractSubject(text)); return rules(`The AI is unavailable (${r.error}), so here is a rule-based breakdown instead.`, { steps, subject: extractSubject(text), error: r.error, retryable: true }); }
+      const subject = extractSubject(text), { steps, generic } = breakdownSteps(subject); return rules(`Here’s a rule-based breakdown for “${subject}”${generic ? ' (a general pattern, since I don’t recognise the topic)' : ''}. Add them as quests if they look right.${offNote}`, { steps, subject });
+    }
+    const parsed = parsePlan(text, { nowMs, tz: zone });
+    if (isBareDirective(text)) return rules('Tell me what you need to do, with deadlines or durations if you have them. For example: “maths test Thursday, draw three times this week, website for 2 hours”.');
+    if (intent === 'plan' || looksLikePlan(text)) {
+      if (!parsed.tasks.length && !parsed.fixed.length && !aiLive) return rules('Tell me what you need to do, with deadlines or durations if you have them. For example: “maths test Thursday, draw three times this week, website for 2 hours”.');
+      try {
+        const g = await S.generateProposal(text), p = g.proposal;
+        if (!p.tasks.length && !p.fixed?.length) { if (aiLive && intent !== 'plan') { const r = await viaAI(); if (r.ok) return { text: r.reply, source: 'ai' }; } return rules(scopeText(a.name, a, offNote), p.aiError ? { error: p.aiError, retryable: true } : {}); }
+        const short = p.unscheduled.reduce((n, u) => n + u.minutes_short, 0);
+        return { text: `Here’s a draft: ${p.tasks.length} task${p.tasks.length === 1 ? '' : 's'} placed into ${p.blocks.length} session${p.blocks.length === 1 ? '' : 's'}${short ? `, but ${short} minutes don’t fit` : ''}. Review, edit or reject it below; nothing is saved until you approve.${p.aiError ? ` The AI was unavailable (${p.aiError}), so this is the rule-based plan.` : ''}${a.aiActive && !online ? offNote : ''}`, source: p.source, proposal: p, alternatives: g.alternatives, draftError: g.draftError, error: p.aiError, retryable: !!p.aiError };
+      } catch (e) { return rules(e.message, { error: e.message }); }
+    }
+    if (aiLive) { const r = await viaAI(); if (r.ok) return { text: r.reply, source: 'ai' }; return rules(scopeText(a.name, a) + ` (The AI is unavailable: ${r.error})`, { error: r.error, retryable: true }); }
+    return rules(scopeText(a.name, a, offNote));
+  };
 
   // ---------- user reminders ----------
   S.listReminders = () => repo.listReminders();

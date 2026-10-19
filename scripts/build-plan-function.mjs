@@ -16,10 +16,16 @@ async function callModel(messages) {
     return (await res.json()).choices?.[0]?.message?.content ?? '';
   } finally { clearTimeout(timer); }
 }
+async function prefs(id) {   // works before and after migration 0007 (ai_share_data may not exist yet)
+  let r = await admin.from('preferences').select('ai_opt_in,ai_share_data').eq('user_id', id).maybeSingle();
+  if (r.error) r = await admin.from('preferences').select('ai_opt_in').eq('user_id', id).maybeSingle();
+  if (r.error) throw r.error; return r.data || {};
+}
 Deno.serve(req => handlePlan(req, {
   allowedOrigins, dailyLimit: Number(Deno.env.get('AI_DAILY_LIMIT') || 20),
   getUser: async token => { const { data, error } = await admin.auth.getUser(token); return error ? null : data.user; },
-  hasOptedIn: async id => { const { data, error } = await admin.from('preferences').select('ai_opt_in').eq('user_id', id).maybeSingle(); if (error) throw error; return !!data?.ai_opt_in; },
+  hasOptedIn: async id => !!(await prefs(id)).ai_opt_in,
+  sharesData: async id => !!(await prefs(id)).ai_share_data,
   consume: async (id, limit) => { const { data, error } = await admin.rpc('ai_consume', { p_user: id, p_limit: limit }); if (error) throw error; return data === true; },
   callModel }));
 `;

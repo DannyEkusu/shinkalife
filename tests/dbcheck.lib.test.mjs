@@ -15,9 +15,9 @@ const client = ({ present, fnInstalled, missingCols = [] }) => mod.exports.creat
     return m === 'HEAD' ? new Response(null, { status: 404 }) : json(404, { code: 'PGRST205', message: `Could not find the table 'public.${name}' in the schema cache` }); } } });
 const all = REQUIRED.map(r => r[0]);
 test('reports EVERY missing table (the original probe only ever reported the function)', async () => {
-  const r = await checkDatabase(client({ present: new Set(), fnInstalled: false })); assert.equal(r.ok, false); assert.equal(r.missing.length, 20); assert.deepEqual(r.migrations, ['0001', '0002', '0003', '0004', '0006']); assert.ok(r.missing.some(m => m.name === 'profiles')); });
+  const r = await checkDatabase(client({ present: new Set(), fnInstalled: false })); assert.equal(r.ok, false); assert.equal(r.missing.length, 22); assert.deepEqual(r.migrations, ['0001', '0002', '0003', '0004', '0006', '0007']); assert.ok(r.missing.some(m => m.name === 'profiles')); });
 test('reports a partly applied setup precisely', async () => {
-  const r = await checkDatabase(client({ present: new Set(all.filter(t => ['profiles', 'preferences', 'categories', 'tasks', 'subtasks'].includes(t))), fnInstalled: false })); assert.deepEqual(r.migrations, ['0003', '0004', '0006']); assert.ok(!r.missing.some(m => m.name === 'tasks')); });
+  const r = await checkDatabase(client({ present: new Set(all.filter(t => ['profiles', 'preferences', 'categories', 'tasks', 'subtasks'].includes(t))), fnInstalled: false })); assert.deepEqual(r.migrations, ['0003', '0004', '0006', '0007']); assert.ok(!r.missing.some(m => m.name === 'tasks')); });
 test('a complete setup passes', async () => { const r = await checkDatabase(client({ present: new Set(all), fnInstalled: true })); assert.equal(r.ok, true); assert.deepEqual(r.missing, []); });
 
 test('detects a missing COLUMN from migration 0006 on an otherwise complete database', async () => {

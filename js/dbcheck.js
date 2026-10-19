@@ -1,7 +1,8 @@
 // Tells you which migrations are missing in the connected Supabase project (read-only probes; writes nothing).
 export const REQUIRED = [['profiles', '0001'], ['preferences', '0001'], ['categories', '0002'], ['tasks', '0002'], ['subtasks', '0002'], ['availability', '0003'], ['events', '0003'], ['event_exceptions', '0003'],
   ['schedule_blocks', '0003'], ['planner_drafts', '0003'], ['reminder_settings', '0003'], ['push_subscriptions', '0003'], ['weekly_reviews', '0003'], ['xp_ledger', '0004'], ['achievements_unlocked', '0004'],
-  ['reminders', '0006'], ['ai_usage', '0006'], ['preferences', '0006', 'assistant_name,ai_opt_in'], ['reminder_settings', '0006', 'muted_categories']];
+  ['reminders', '0006'], ['ai_usage', '0006'], ['preferences', '0006', 'assistant_name,ai_opt_in'], ['reminder_settings', '0006', 'muted_categories'],
+  ['assistant_messages', '0007'], ['preferences', '0007', 'ai_share_data,chat_history']];
 const gone = e => !!e && (['PGRST205', 'PGRST202', '42P01', '42883'].includes(e.code) || /could not find|does not exist/i.test(e.message || ''));
 const offline = e => !!e && /failed to fetch|network|fetch failed|load failed/i.test(e.message || '');
 export async function checkDatabase(sb) {

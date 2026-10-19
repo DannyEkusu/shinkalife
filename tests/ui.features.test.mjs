@@ -34,7 +34,7 @@ test('with a provider configured: AI stays OFF until opted in, then is used and 
   let calls = 0; state.svc = createService(repo, { provider: { proposeTasks: async () => { calls++; return { tasks: [{ title: 'Read chapter 3', est_minutes: 60, priority: 2, quest_type: 'side' }] }; } } });
   await Pages.planner(); assert.match($('#plan-root').textContent, /Optional: AI assistance \(off\)/); assert.ok(btn('#plan-root', /Turn on AI assistance/));
   $('#pt').value = 'read my book'; submit($('#pf')); await until(() => /Approve & apply/.test($('#plan-out').textContent)); assert.equal(calls, 0, 'nothing sent before opt-in'); assert.match($('#plan-out').textContent, /Rule-based plan/);
-  btn('#plan-root', /Turn on AI assistance/).click(); await until(() => /AI is on/.test($('#plan-root').textContent)); assert.match($('#plan-root').textContent, /not your tasks, calendar or profile/);
+  btn('#plan-root', /Turn on AI assistance/).click(); await until(() => /AI is on/.test($('#plan-root').textContent)); assert.match($('#plan-root').textContent, /Your tasks and calendar are NOT shared/);
   $('#pt').value = 'read my book'; submit($('#pf')); await until(() => /AI-assisted: tasks were broken down/.test($('#plan-out').textContent)); assert.equal(calls, 1); assert.match($('#plan-out').textContent, /Read chapter 3/);
   btn('#plan-root', /Turn off AI/).click(); await until(() => /Optional: AI assistance \(off\)/.test($('#plan-root').textContent)); state.svc = createService(repo, {}); });
 

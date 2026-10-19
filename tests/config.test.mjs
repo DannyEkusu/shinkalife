@@ -11,8 +11,8 @@ test('clear errors for missing or malformed config (never a silent success)', ()
 const sbFake = ({ missing = [], fn = 'task not found', net = false } = {}) => ({
   from: t => ({ select: () => ({ limit: async () => ({ error: net ? { message: 'TypeError: Failed to fetch' } : missing.includes(t) ? { code: 'PGRST205', message: `Could not find the table 'public.${t}' in the schema cache` } : null }) }) }),
   rpc: async () => ({ error: net ? { message: 'TypeError: Failed to fetch' } : fn === 'missing' ? { code: 'PGRST202', message: 'Could not find the function public.award_task_xp' } : { message: fn } }) });
-test('database self-check: complete setup', async () => { const r = await checkDatabase(sbFake()); assert.equal(r.ok, true); assert.deepEqual(r.missing, []); assert.equal(REQUIRED.length, 19); });
+test('database self-check: complete setup', async () => { const r = await checkDatabase(sbFake()); assert.equal(r.ok, true); assert.deepEqual(r.missing, []); assert.equal(REQUIRED.length, 21); });
 test('database self-check names the missing migrations', async () => {
   const r = await checkDatabase(sbFake({ missing: ['events', 'xp_ledger', 'tasks'], fn: 'missing' })); assert.equal(r.ok, false); assert.deepEqual(r.migrations, ['0002', '0003', '0004']); assert.ok(r.missing.some(m => m.name === 'award_task_xp()'));
-  assert.deepEqual((await checkDatabase(sbFake({ missing: REQUIRED.map(x => x[0]), fn: 'missing' }))).migrations, ['0001', '0002', '0003', '0004', '0006']); });
+  assert.deepEqual((await checkDatabase(sbFake({ missing: REQUIRED.map(x => x[0]), fn: 'missing' }))).migrations, ['0001', '0002', '0003', '0004', '0006', '0007']); });
 test('database self-check distinguishes "offline" from "not set up"', async () => { const r = await checkDatabase(sbFake({ net: true })); assert.equal(r.unreachable, true); assert.equal(r.ok, false); assert.deepEqual(r.missing, []); });

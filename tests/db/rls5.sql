@@ -1,0 +1,22 @@
+-- Migration 0007: assistant history + consent flags (users Erin and Finn)
+insert into auth.users (id) values ('a5a5a5a5-0000-0000-0000-000000000007'), ('b6b6b6b6-0000-0000-0000-000000000008');
+select t.ok('new consent flags default to private (share=false) and history on', (select not ai_share_data and chat_history from public.preferences where user_id = 'a5a5a5a5-0000-0000-0000-000000000007'));
+select t.as_user('a5a5a5a5-0000-0000-0000-000000000007');
+insert into public.assistant_messages (role, source, content) values ('user', 'user', 'Plan my week'), ('assistant', 'rules', 'Here is a draft'), ('assistant', 'ai', 'Try 2 short sessions');
+select t.ok('owner can read and write own history', t.cnt('select 1 from public.assistant_messages') = 3);
+select t.ok('owner can flip consent flags', t.affected($$update public.preferences set ai_share_data = true, chat_history = false$$) = 1);
+select t.fails('invalid role rejected', $$insert into public.assistant_messages (role, source, content) values ('system', 'user', 'x')$$);
+select t.fails('invalid source rejected', $$insert into public.assistant_messages (role, source, content) values ('assistant', 'gpt', 'x')$$);
+select t.fails('empty message rejected', $$insert into public.assistant_messages (role, source, content) values ('user', 'user', '')$$);
+select t.fails('oversized message rejected', $$insert into public.assistant_messages (role, source, content) values ('user', 'user', repeat('a', 2001))$$);
+select t.fails('cannot write a message as someone else', $$insert into public.assistant_messages (user_id, role, source, content) values ('b6b6b6b6-0000-0000-0000-000000000008', 'user', 'user', 'x')$$);
+insert into public.assistant_messages (role, source, content) select 'user', 'user', 'm' || g from generate_series(1, 205) g;
+select t.ok('history is trimmed to the newest 200 per user', t.cnt('select 1 from public.assistant_messages') = 200);
+select t.as_user('b6b6b6b6-0000-0000-0000-000000000008');
+select t.ok('other user sees none of it and cannot change or delete it', t.cnt('select 1 from public.assistant_messages') = 0 and t.affected($$update public.assistant_messages set content = 'pwned'$$) + t.affected($$delete from public.assistant_messages$$) = 0);
+insert into public.assistant_messages (role, source, content) values ('user', 'user', 'mine');
+select t.ok('trim only affects the writer (other users keep their messages)', t.cnt('select 1 from public.assistant_messages') = 1);
+select t.as_anon();
+select t.fails('anonymous cannot read history', 'select * from public.assistant_messages');
+select t.su(); delete from auth.users where id = 'a5a5a5a5-0000-0000-0000-000000000007';
+select t.ok('deleting a user removes their history', (select count(*) from public.assistant_messages) = 1);

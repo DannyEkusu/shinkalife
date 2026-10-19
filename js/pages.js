@@ -3,6 +3,7 @@ import { repo } from './repo.js';
 import { h, $, fmtTime, fmtDay, toInput, fromInput, dayStart, minToInput, inputToMin, note, failure, needData, toast } from './ui.js';
 import { localParts } from './recur-core.js';
 import * as N from './notify.js';
+import { detectSupport, supportRows } from './support.js';
 import { CONFIG } from './config.js';
 import { DEFAULT_ASSISTANT_NAME } from './service.js';
 import { KINDS, CATEGORIES, reminderAlerts } from './reminders-core.js';
@@ -18,7 +19,7 @@ export async function dashboard() {
     const d = await svc().dashboard(), tz = d.tz;
     $('#ring').setAttribute('stroke-dasharray', `${d.xp.pct} 100`); $('#lvl').textContent = d.xp.level; $('#lvl-note').textContent = `${d.xp.into} / ${d.xp.needed} XP to level ${d.xp.level + 1}`;
     const line = [...d.today.fixed.map(f => ({ t: f.start, el: item(f.title, `${fmtTime(f.start, tz)}–${fmtTime(f.end, tz)}`, 'Fixed')})), ...d.today.blocks.map(b => ({ t: b.start, el: item(b.title, `${fmtTime(b.start, tz)}–${fmtTime(b.end, tz)}`, b.status === 'done' ? 'Done' : 'Planned') }))].sort((a, b) => a.t - b.t);
-    const done = async (t, ok) => { try { const r = await svc().setTaskDone(t.id, ok); toast(r.award?.awarded ? `+${r.award.xp} XP` : 'Updated'); dashboard(); } catch (e) { toast(e.message); } };
+    const done = async (t, ok) => { try { const r = await svc().setTaskDone(t.id, ok); toast(r.award?.awarded ? `+${r.award.xp} XP` : r.award?.queued ? 'Saved. XP is recorded when you’re back online.' : 'Updated'); dashboard(); } catch (e) { toast(e.message); } };
     root.replaceChildren(
       d.availabilityMissing ? h('div', { class: 'banner' }, 'Set your available hours in ', h('a', { href: '#/settings' }, 'Settings'), ' so the planner can respect your real time.') : null,
       h('div', { class: 'grid' },
@@ -112,16 +113,41 @@ function addForms(tz) {
 
 // ---------- AI Planner ----------
 let cur = null, alts = [];
+let chat = [];   // the visible conversation: { role, source: 'user'|'ai'|'rules', text, pending?, steps?, subject?, retryText?, added? }
+export const resetPages = () => { chat = []; cur = null; alts = []; editing = null; };
 export async function planner() {
   const root = $('#plan-root'); if (!svc()) return needData(root);
-  let a, ci; try { [a, ci] = await Promise.all([svc().assistant(), svc().checkin()]); } catch (e) { return failure(root, e, planner); }
+  let a, ci; try { [a, ci] = await Promise.all([svc().assistant(), svc().checkin()]); if (!chat.length) chat = await svc().history(); } catch (e) { return failure(root, e, planner); }
   state.assistantName = a.name; $('#plan-title').textContent = `Ask ${a.name}`;
-  root.replaceChildren(assistantPanel(a, ci), h('form', { class: 'panel', id: 'pf', onsubmit: e => { e.preventDefault(); gen($('#pt').value); } }, h('label', { for: 'pt' }, 'Describe what you need to do'),
-    h('textarea', { id: 'pt', rows: '4', maxlength: '2000', placeholder: 'e.g. Maths test on Thursday, practise drawing three times this week, Sunday music session at 3pm, work on my website' }),
-    h('p', { class: 'addrow' }, h('button', { class: 'btn', type: 'submit' }, 'Generate proposal'), h('button', { class: 'btn ghost', type: 'button', onclick: recover }, 'Recover missed sessions')),
-    h('p', { class: 'muted small' }, 'Uses your available hours, fixed commitments and deadlines. Nothing is saved to your schedule until you approve it.')), h('div', { id: 'plan-out' }));
+  root.replaceChildren(assistantPanel(a, ci), h('div', { class: 'panel' }, h('div', { id: 'chat-log', class: 'chat', role: 'log', 'aria-live': 'polite', 'aria-label': `Conversation with ${a.name}` }, ...chatNodes()),
+    h('form', { id: 'pf', onsubmit: e => { e.preventDefault(); const v = $('#pt').value.trim(); if (v) { $('#pt').value = ''; ask(v); } } }, h('label', { for: 'pt' }, `Message ${a.name}`),
+      h('textarea', { id: 'pt', rows: '3', maxlength: '2000', placeholder: 'e.g. Maths test Thursday, draw three times this week, website for 2 hours', onkeydown: e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); $('#pf').requestSubmit?.(); } } }),
+      h('p', { class: 'addrow' }, h('button', { class: 'btn', type: 'submit' }, 'Send'), h('button', { class: 'btn ghost', type: 'button', onclick: recover }, 'Recover missed sessions'), chat.length ? h('button', { class: 'btn ghost', type: 'button', onclick: clearChat }, 'Clear conversation') : null)),
+    h('p', { class: 'muted small' }, 'Every answer is labelled: Rule-based (built-in, works offline) or AI (real model, only when switched on and you’re online). Nothing is saved to your schedule until you approve a proposal.')), h('div', { id: 'plan-out' }));
   if (state.replanTaskId) { const id = state.replanTaskId; state.replanTaskId = null; run(() => svc().replanTask(id).then(p => ({ proposal: p, alternatives: [] }))); }
 }
+const PROMPTS = ['Maths test Thursday, draw three times this week, website for 2 hours', 'Break down my essay', 'What’s due this week?', 'I fell behind, help me catch up'];
+function chatNodes() {
+  if (!chat.length) return [h('div', { class: 'chat-empty' }, h('p', {}, `No messages yet. Ask ${state.assistantName || 'your assistant'} to plan a schedule, break a task into steps, or catch up. Try one:`), h('p', { class: 'addrow' }, PROMPTS.map(p => h('button', { class: 'btn ghost sm', type: 'button', onclick: () => ask(p) }, p))))];
+  return chat.map(m => h('div', { class: `bubble ${m.role}${m.pending ? ' pending' : ''}`, 'aria-busy': m.pending ? 'true' : null },
+    m.role === 'assistant' && !m.pending ? h('span', { class: 'tag ' + (m.source === 'ai' ? 'fixed' : '') }, m.source === 'ai' ? 'AI' : 'Rule-based') : null, h('p', {}, m.text),
+    m.steps?.length ? h('div', {}, h('ol', {}, m.steps.map(s => h('li', {}, s))), m.added ? h('p', { class: 'small muted' }, 'Added to your quests.') : h('button', { class: 'btn ghost sm', type: 'button', onclick: () => addSteps(m) }, 'Add these as quests')) : null,
+    m.retryText ? h('button', { class: 'btn ghost sm', type: 'button', onclick: () => { chat = chat.filter(x => x !== m); ask(m.retryText, true); } }, 'Try AI again') : null));
+}
+const draw = () => { const l = $('#chat-log'); if (l) { l.replaceChildren(...chatNodes()); l.scrollTop = l.scrollHeight; } };
+async function ask(text, retry = false) {
+  if (!retry) { chat.push({ role: 'user', source: 'user', text }); svc().remember('user', 'user', text); }
+  const bubble = { role: 'assistant', source: 'rules', text: 'Thinking…', pending: true }; chat.push(bubble); draw();
+  try {
+    const r = await svc().assistantReply(text, { lastProposal: cur, history: chat.filter(m => !m.pending).slice(-10) });
+    Object.assign(bubble, { source: r.source, text: r.text, pending: false, steps: r.steps, subject: r.subject, retryText: r.retryable ? text : null }); svc().remember('assistant', r.source, r.text);
+    if (r.proposal) { cur = { ...r.proposal, text: r.proposal.text || text }; alts = r.alternatives || []; if (r.draftError) toast('Draft not saved: ' + r.draftError); show(); } else out()?.replaceChildren();
+  } catch (e) { Object.assign(bubble, { text: e.message, pending: false, retryText: text }); }
+  draw();
+}
+async function addSteps(m) { try { for (const s of m.steps) await svc().createTask({ title: `${m.subject}: ${s}`.slice(0, 120), quest_type: 'side', priority: 2, est_minutes: 30 }); m.added = true; toast(`${m.steps.length} quests added`); draw(); } catch (e) { toast(e.message); } }
+async function clearChat() { try { await svc().clearHistory(); } catch { toast('Cleared on screen. Saved history couldn’t be cleared (needs internet).'); } chat = []; planner(); }
+
 const out = () => $('#plan-out');
 async function run(fn) { try { note0('Working…'); const r = await fn(); cur = r.proposal; alts = r.alternatives || []; if (r.draftError) toast('Draft not saved: ' + r.draftError); show(); } catch (e) { out().replaceChildren(h('div', { class: 'msg err', role: 'alert' }, e.message), /available hours/.test(e.message) ? h('p', {}, h('a', { href: '#/settings' }, 'Open Settings')) : null); } }
 const note0 = t => out().replaceChildren(h('p', { class: 'muted' }, t));
@@ -190,7 +216,7 @@ export async function settingsExtras() {
         catBlock(rs), h('p', { class: 'muted small' }, rs.paused_until && Date.parse(rs.paused_until) > Date.now() ? `Paused until ${new Date(rs.paused_until).toLocaleString()}.` : 'Not paused.'),
         h('p', { class: 'addrow' }, h('button', { class: 'btn', type: 'button', onclick: () => saveRem(rs, null) }, 'Save reminder settings'), h('button', { class: 'btn ghost', type: 'button', onclick: () => saveRem(rs, new Date(Date.now() + DAY).toISOString()) }, 'Pause for 24 hours'), h('button', { class: 'btn ghost', type: 'button', onclick: () => saveRem(rs, 'clear') }, 'Resume')),
         notifBlock(as.name), h('div', { id: 'rm-msg', class: 'msg', role: 'status' })),
-      h('div', { class: 'panel' }, h('h2', {}, 'Your data'), h('p', { class: 'addrow' }, h('button', { class: 'btn ghost', type: 'button', onclick: async () => { try { const blob = new Blob([JSON.stringify(await svc().exportAll(), null, 2)], { type: 'application/json' }), a = h('a', { href: URL.createObjectURL(blob), download: 'shinkalife-export.json' }); a.click(); URL.revokeObjectURL(a.href); } catch (e) { toast(e.message); } } }, 'Export my data (JSON)')),
+      offlinePanel(), supportPanel(), h('div', { class: 'panel' }, h('h2', {}, 'Your data'), h('p', { class: 'addrow' }, h('button', { class: 'btn ghost', type: 'button', onclick: async () => { try { const blob = new Blob([JSON.stringify(await svc().exportAll(), null, 2)], { type: 'application/json' }), a = h('a', { href: URL.createObjectURL(blob), download: 'shinkalife-export.json' }); a.click(); URL.revokeObjectURL(a.href); } catch (e) { toast(e.message); } } }, 'Export my data (JSON)')),
         h('p', { class: 'muted small' }, 'Account deletion needs a server-side function with elevated permissions, which isn’t set up yet, so it is not offered here. See docs/ARCHITECTURE.md.')));
   })();
 }
@@ -201,15 +227,19 @@ async function saveRem(rs, pause) { try { await svc().saveReminderSettings({ ena
 function assistantPanel(a, ci, settings = false) {
   if (settings) {
     const msg = h('div', { id: 'as-msg', class: 'msg', role: 'status', 'aria-live': 'polite' });
+    const flag = async (k, on) => { try { await svc().setAssistantFlag(k, on); note(msg, 'Saved.', true); } catch (e) { note(msg, e.message); } };
     const save = async raw => { try { const n = await svc().saveAssistantName(raw); state.assistantName = n; $('#as-name').value = n === DEFAULT_ASSISTANT_NAME ? '' : n; note(msg, n === DEFAULT_ASSISTANT_NAME && !String(raw).trim() ? `Name reset to the default (${n}).` : `Saved. Your assistant is now called ${n}.`, true); } catch (e) { note(msg, e.message); } };
     return h('div', { class: 'panel' }, h('h2', {}, 'Your assistant'), h('p', { class: 'muted' }, 'Choose a name for your ShinkaLife planning assistant. It only personalises the interface: it is software, not a person, and it has no feelings or memory beyond your saved plans.'),
       h('form', { class: 'addrow', onsubmit: e => { e.preventDefault(); save($('#as-name').value); } }, h('div', {}, h('label', { for: 'as-name' }, 'Assistant name (up to 30 characters)'), h('input', { id: 'as-name', type: 'text', maxlength: '30', placeholder: DEFAULT_ASSISTANT_NAME, autocomplete: 'off', value: a.isDefault ? '' : a.name })),
         h('button', { class: 'btn', type: 'submit' }, 'Save name'), h('button', { class: 'btn ghost', type: 'button', onclick: () => { $('#as-name').value = ''; save(''); } }, 'Reset to default')),
-      h('p', { class: 'small muted' }, `Planning mode: ${a.aiActive ? 'AI-assisted (on)' : a.aiConfigured ? 'AI available, currently off' : 'rule-based (AI is not set up for this site)'}.`), msg);
+      h('p', { class: 'small muted' }, `Planning mode: ${a.aiActive ? 'AI-assisted (on)' : a.aiConfigured ? 'AI available, currently off' : 'rule-based (AI is not set up for this site)'}.`),
+      h('label', { class: 'check', for: 'as-hist' }, h('input', { id: 'as-hist', type: 'checkbox', checked: a.saveHistory, onchange: e => flag('chat_history', e.target.checked) }), 'Save my conversation with the assistant in my account'),
+      a.aiConfigured ? h('label', { class: 'check', for: 'as-share' }, h('input', { id: 'as-share', type: 'checkbox', checked: a.shareData, disabled: !a.aiOptIn, onchange: e => flag('ai_share_data', e.target.checked) }), 'Let the AI see my deadlines and today’s schedule (titles and times only; off by default)') : null,
+      h('p', {}, h('button', { class: 'btn ghost sm', type: 'button', onclick: async () => { try { await svc().clearHistory(); chat = []; note(msg, 'Saved conversation cleared.', true); } catch (e) { note(msg, e.message); } } }, 'Clear saved conversation')), msg);
   }
   const flip = on => async () => { try { await svc().setAiOptIn(on); planner(); } catch (e) { toast(e.message); } };
   return h('div', { class: 'panel assistant' }, h('p', {}, tag(a.aiActive ? 'AI-assisted' : 'Rule-based', a.aiActive ? 'fixed' : ''), ' ', `Hi, I’m ${a.name}, your ShinkaLife planning assistant. Tell me what you need to get done and I’ll draft a schedule for you to review. Nothing is saved until you approve it.`),
-    a.aiConfigured ? (a.aiOptIn ? h('p', { class: 'small muted' }, `AI is on: the text you type below (not your tasks, calendar or profile) is sent to ${aiLabel()} through this site’s server function. `, h('button', { class: 'btn ghost sm', type: 'button', onclick: flip(false) }, 'Turn off AI'))
+    a.aiConfigured ? (a.aiOptIn ? h('p', { class: 'small muted' }, `AI is on: your messages are sent to ${aiLabel()} through this site’s server function. ${a.shareData ? 'Your deadlines and today’s schedule (titles and times only) are included.' : 'Your tasks and calendar are NOT shared (change this in Settings).'} `, h('button', { class: 'btn ghost sm', type: 'button', onclick: flip(false) }, 'Turn off AI'))
       : h('div', { class: 'banner' }, h('strong', {}, 'Optional: AI assistance (off)'), h('p', {}, `If you turn this on, the text you type in the planner (not your tasks, calendar or profile) is sent to ${aiLabel()} to break it into tasks. Scheduling still happens here. You can turn it off at any time.`), h('button', { class: 'btn', type: 'button', onclick: flip(true) }, 'Turn on AI assistance')))
       : h('p', { class: 'small muted' }, 'AI isn’t set up for this site yet, so planning uses built-in rules. Turning AI on needs a server function and an AI provider key (see docs/AI_SETUP.md). Nothing is sent anywhere in the meantime.'),
     ci && (ci.missed || ci.overdue) ? h('p', { class: 'small' }, `Check-in: ${ci.missed} missed session${ci.missed === 1 ? '' : 's'}, ${ci.overdue} task${ci.overdue === 1 ? '' : 's'} past due. That’s okay: `, h('button', { class: 'btn ghost sm', type: 'button', onclick: recover }, 'draft a recovery plan')) : null,
@@ -277,3 +307,27 @@ export async function tick() {
   return items;
 }
 export function startTicker() { setInterval(() => tick().catch(() => {}), 30000); }
+
+// ---------- offline & sync, browser support (Settings) ----------
+const STATUS = { online: 'Online: all changes are saved to your account', offline: 'Offline: changes are saved on this device and will sync later', syncing: 'Syncing…', error: 'Needs attention' };
+function offlinePanel() {
+  const off = state.offline, s = off?.state(), t = ms => new Date(ms).toLocaleString();
+  const body = !off ? [h('p', { class: 'muted' }, 'Offline saving is active when you are signed in to your account. It isn’t used in sample-data mode.')] : [
+    h('p', {}, h('strong', {}, 'Status: '), STATUS[s.status], s.lastSync ? ` · last synced ${t(s.lastSync)}` : ''), s.lastError ? h('p', { class: 'msg err', role: 'alert' }, s.lastError) : null,
+    s.storage === 'memory' ? h('p', { class: 'msg err', role: 'alert' }, 'This browser blocked local storage (private browsing?). Changes made offline are only kept until you close this tab.') : null, s.storageError ? h('p', { class: 'msg err', role: 'alert' }, `Couldn’t save on this device: ${s.storageError}`) : null,
+    s.queue.length ? h('div', {}, h('p', {}, h('strong', {}, `${s.queue.length} waiting to sync:`)), h('ul', { class: 'plain small' }, s.queue.map(q => h('li', {}, q.text)))) : h('p', { class: 'muted' }, 'Nothing is waiting to sync.'),
+    s.failed.length ? h('div', { class: 'msg err' }, h('p', {}, h('strong', {}, `${s.failed.length} couldn’t be saved (the server refused them):`)), h('ul', { class: 'plain small' }, s.failed.map(f => h('li', {}, `${f.text}: ${f.message}`))), h('p', { class: 'addrow' }, h('button', { class: 'btn ghost sm', type: 'button', onclick: () => off.retryFailed() }, 'Try again'), h('button', { class: 'btn ghost sm', type: 'button', onclick: () => off.discardFailed() }, 'Discard these'))) : null,
+    ...s.conflicts.map(c => h('div', { class: 'msg err' }, h('p', {}, h('strong', {}, `${c.text} wasn’t applied. `), c.message), h('p', { class: 'addrow' }, h('button', { class: 'btn ghost sm', type: 'button', onclick: () => off.resolveConflict(c.id, true).catch(e => toast(e.message)) }, 'Apply my change anyway'), h('button', { class: 'btn ghost sm', type: 'button', onclick: () => off.resolveConflict(c.id, false) }, 'Keep the other version')))),
+    h('p', { class: 'addrow' }, h('button', { class: 'btn', type: 'button', onclick: () => off.sync().catch(() => {}) }, 'Sync now'),
+      h('button', { class: 'btn ghost', type: 'button', onclick: async () => { const n = off.state().pending; if (confirm(n ? `${n} change${n > 1 ? 's haven’t' : ' hasn’t'} synced and will be lost. Clear this device’s saved data anyway?` : 'Clear the copy of your data saved on this device? Your account data is not affected.')) { await off.wipe(); toast('Cleared. It will be saved again next time you’re online.'); } } }, 'Clear data saved on this device'))];
+  return h('div', { class: 'panel', id: 'offline-panel' }, h('h2', {}, 'Offline & sync'), ...body,
+    h('details', {}, h('summary', {}, 'What works offline, and what needs internet'), h('p', { class: 'small' }, h('strong', {}, 'Works offline: '), 'opening the app, reading your quests, calendar, reminders and progress that were saved on this device, creating/editing/completing quests and steps, reminders, assistant name and reminder settings, and the built-in rule-based assistant. XP for quests completed offline is recorded when you reconnect.'),
+      h('p', { class: 'small' }, h('strong', {}, 'Needs internet: '), 'signing in or up, AI answers, approving schedules, calendar events and time blocks, available hours, profile changes, weekly reflections and saved assistant history. Changes are never silently lost: anything that can’t be queued tells you so.')));
+}
+export const renderOfflinePanel = () => { const p = $('#offline-panel'); if (p && state.offline) p.replaceWith(offlinePanel()); };
+function supportPanel() {
+  const rows = supportRows(detectSupport(), !!state.installPrompt);
+  return h('div', { class: 'panel' }, h('h2', {}, 'This browser'), h('ul', { class: 'plain' }, rows.map(r => h('li', {}, h('strong', {}, `${r.ok ? '✓' : '✗'} ${r.label}: `), r.text))),
+    state.installPrompt ? h('p', {}, h('button', { class: 'btn', type: 'button', onclick: async () => { const e = state.installPrompt; state.installPrompt = null; try { await e.prompt(); } catch {} settingsExtras(); } }, 'Install ShinkaLife')) : null,
+    h('p', { class: 'muted small' }, 'Browsers differ: Chrome and Edge can install the app on desktop and Android; Safari on iPhone/iPad installs via Share → Add to Home Screen; Firefox on desktop can’t install it. Notifications while the app is closed aren’t available in any browser yet.'));
+}

@@ -97,3 +97,10 @@ details.panel summary{cursor:pointer;font-weight:600;min-height:44px;display:fle
 .cats{border:1px solid var(--border);padding:var(--s-3);margin:var(--s-3) 0}.cats label{margin:4px 0}.notif{margin:var(--s-3) 0}
 .assistant .banner{margin-top:var(--s-3)}.remrow{display:flex;flex-wrap:wrap;gap:var(--s-2);align-items:center;justify-content:space-between;padding:var(--s-2) 0;border-bottom:1px solid var(--border)}
 @media (max-width:720px){nav.side a{font-size:.56rem;padding:6px 0;min-width:0}nav.side a span{overflow:hidden;text-overflow:ellipsis;max-width:100%}}
+
+.netpill{display:inline-flex;align-items:center;gap:6px;min-height:32px;padding:2px 12px;margin-bottom:var(--s-3);border:1px solid var(--border);background:var(--surface);color:var(--text);font:600 .78rem var(--font-body);cursor:pointer;border-radius:999px}
+.netpill[data-status=offline]{border-color:var(--accent);background:var(--surface-2)}.netpill[data-status=error]{border:2px solid var(--text)}.netpill[data-status=syncing]{border-style:dashed}
+.chat{display:flex;flex-direction:column;gap:var(--s-2);max-height:55vh;overflow-y:auto;padding:var(--s-2) 0}.chat-empty{color:var(--muted)}.chat-empty .addrow{margin-top:var(--s-2)}
+.bubble{max-width:min(640px,92%);padding:var(--s-2) var(--s-3);border:1px solid var(--border);background:var(--surface)}.bubble p{margin:4px 0}
+.bubble.user{align-self:flex-end;background:var(--surface-2);border-color:var(--accent)}.bubble.assistant{align-self:flex-start}.bubble.pending{opacity:.8;font-style:italic}.bubble ol{margin:6px 0 6px 20px;padding:0}
+@supports not (background: color-mix(in srgb, red 50%, blue)) {body{background:var(--bg)}nav.side{background:var(--surface)}.cal-item.block{background:var(--surface-2)}.q-main{background:var(--surface)}.toast{background:var(--surface-2)}}

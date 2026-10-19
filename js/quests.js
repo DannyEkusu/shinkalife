@@ -41,7 +41,7 @@ function card(t) {
   const li = h('li', { class: `q q-${t.quest_type}${t.status === 'done' ? ' done' : ''}` },
     h('div', { class: 'q-head' },
       h('input', { type: 'checkbox', checked: t.status === 'done', 'aria-label': `Mark “${t.title}” ${t.status === 'done' ? 'not done' : 'done'}`,
-        onchange: e => { e.target.closest('li').classList.add('pop'); setTimeout(() => guard(async () => { const r = await state.svc.setTaskDone(t.id, t.status !== 'done'); flash = r.award?.awarded ? `+${r.award.xp} XP earned.` : r.awardError ? `Completed. XP could not be recorded yet (${r.awardError}); it will be retried.` : ''; }), 300); } }),
+        onchange: e => { e.target.closest('li').classList.add('pop'); setTimeout(() => guard(async () => { const r = await state.svc.setTaskDone(t.id, t.status !== 'done'); flash = r.award?.awarded ? `+${r.award.xp} XP earned.` : r.award?.queued ? 'Completed. XP will be recorded when you’re back online.' : r.awardError ? `Completed. XP could not be recorded yet (${r.awardError}); it will be retried.` : ''; }), 300); } }),
       h('button', { class: 'q-title', type: 'button', 'aria-expanded': String(open === t.id), onclick: () => { open = open === t.id ? null : t.id; render(); } }, t.title),
       h('span', { class: 'tag' }, TYPES[t.quest_type])),
     h('p', { class: `q-meta small ${ds === 'past' ? 'due-past' : 'muted'}` }, meta));

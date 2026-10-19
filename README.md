@@ -1,55 +1,38 @@
 # ShinkaLife
-*Plan. Progress. Evolve.* A personal growth planner: quests, a timezone-aware calendar, a deterministic scheduler, a rule-based planner (optional AI layer), XP and skills. Static HTML/CSS/vanilla ES modules + Supabase. No build step. Installable PWA. See `docs/STATUS.md` for exactly what is verified.
+*Plan. Progress. Evolve.* A personal growth planner: quests, a timezone-aware calendar, a deterministic scheduler, an assistant (built-in rules, optional AI), reminders, XP and skills, offline mode, installable as an app. Static HTML/CSS/vanilla JS + Supabase. No build step.
+Live site: https://dannyekusu.github.io/ShinkaLife/ · Exact status of every feature: `docs/STATUS.md` · What to upload: `docs/UPLOAD_MANIFEST.md`
 
-## Try it now (no Supabase needed)
-    npm install                      # dev-only: jsdom for UI tests
-    python3 -m http.server 8080      # open http://localhost:8080  then "Open with sample data"
-Sample mode (or `?mock=1`) uses an in-memory mock repository with a permanent banner. Nothing is saved and it is never used automatically.
+## 1. Try it locally (no Supabase needed)
+    npm install                      # dev-only (jsdom, fake-indexeddb)
+    python3 -m http.server 8080      # open http://localhost:8080 then "Open with sample data"
+Sample mode is in-memory, clearly bannered, and never used automatically.
 
-## Tests
-    npm test          # 120 tests: scheduler, recurrence/DST, XP, planner, AI fallback, reminders, service flows, UI flows (jsdom), PWA, theme contrast
-    npm run test:db   # 63 database checks on a throwaway local PostgreSQL 15+ (Supabase auth is shimmed): RLS isolation, constraints, XP ledger, overlap exclusion
-`test:db` needs PostgreSQL binaries (e.g. `apt install postgresql`). It is **not** a substitute for testing on your real Supabase project.
+## 2. Tests
+    npm test          # 167 tests: scheduler/DST, XP, planner, assistant, AI function (incl. chat security), offline engine + IndexedDB, reminders, real-page UI flows (jsdom), auth flow, PWA, GitHub Pages base path
+    npm run test:db   # 116 database checks on a throwaway local PostgreSQL 15+ (RLS isolation, constraints, XP, history)
+`test:db` needs PostgreSQL binaries (`apt install postgresql`). Both use fakes/local databases: they do not replace testing on your real Supabase project and real devices.
 
-## Connect Supabase (step by step)
-Your project's **public** URL and **publishable key** are already in `js/config.js`. The publishable key is not a password: it only says "this app talks to this project". What protects your data is Row Level Security inside the database. Never put a `service_role` key, an `sb_secret_` key or your database password in any file of this project (the app refuses to start if it finds one).
+## 3. Supabase setup (migrations are additive: they never delete data or disable RLS)
+Dashboard > **SQL Editor** > New query. Run each file below **once, in this order, only the ones you haven't run yet** (paste the whole file, press Run; "Success. No rows returned" is right; "already exists" means you ran it before, skip it):
+`supabase/migrations/` **0001** profiles, **0002** quests, **0003** calendar/reminders, **0004** XP, **0005** profile backfill (for accounts created before the tables existed; safe to repeat), **0006** assistant name/AI opt-in/reminders/AI usage, **0007** assistant history + sharing flags.
+Not sure which you've run? Paste the queries in `supabase/checks/verify_setup.sql` one at a time (read-only). The app also shows a red banner after login listing missing tables/columns and which migration to run. If one fails with another error, stop and send me the message; a failed run should leave nothing half-applied (re-run query 1 to confirm).
+Then: **Authentication > URL Configuration**: Site URL and Redirect URLs = the **exact** address you open the site at, e.g. `https://dannyekusu.github.io/ShinkaLife/**` (and `http://localhost:8080/**` for local). **Providers > Email**: keep "Confirm email" on (the app handles both); password minimum 8.
+`js/config.js` already holds your project URL and *publishable* key (public by design; RLS protects data). Never put a `service_role`/`sb_secret_` key, database password or AI key in any file here (the app refuses to start with a secret key).
 
-**1. Create the database tables (once, in order).** Supabase dashboard > *SQL Editor* > *New query*. For each file below: open it, copy everything, paste, press *Run*. Expect "Success. No rows returned". If you see "already exists", you ran it before: skip it.
-   `0001_profiles_preferences.sql` then `0002_categories_tasks_subtasks.sql` then `0003_calendar_planner_reminders.sql` then `0004_xp_ledger.sql` then `0005_backfill_profiles.sql` then `0006_assistant_reminders_ai_usage.sql` (all in `supabase/migrations/`). **Before running anything**, you can see what already exists: paste the queries from `supabase/checks/verify_setup.sql` one at a time (they only read, never change anything). Only run the migrations that are missing, always in number order. 0005 gives accounts you created *before* the tables existed their profile row; it is safe to run more than once.
-**2. Tell Auth where your app lives.** *Authentication > URL Configuration*: set **Site URL** to `http://localhost:8080`, and add these **Redirect URLs**: `http://localhost:8080/**` and, once deployed, `https://<your-github-username>.github.io/<repo-name>/**`. Without this, confirmation and reset links in emails will not bring you back to the app.
-**3. Email confirmation.** *Authentication > Sign In / Providers > Email*. "Confirm email" ON is recommended and the app handles both settings. Supabase's built-in email sender allows only a few emails per hour; for heavy testing confirm test users by hand in *Authentication > Users*, or add your own SMTP later.
-**4. Passwords.** Set the minimum length to 8 or more (the app requires 8).
-**5. Run the app** (`python3 -m http.server 8080`, open http://localhost:8080). After you log in, the app checks your database. A red banner lists any missing tables and which migration to run. No banner = migrations 0001-0004 are in place (run `verify_setup.sql` query 5 to confirm 0005 too).
+## 4. Deploy to GitHub Pages
+The site is static and uses only relative paths (tested against the `/ShinkaLife/` sub-path), so it works at whatever address Pages gives it. **Check the exact address** in your repo > Settings > Pages (my tools couldn't load the live site, and your earlier screenshot used lowercase `/shinkalife/` while your latest message uses `/ShinkaLife/`: if one gives 404, use the other, and use that exact casing in the Supabase redirect URLs).
+- **Upload:** copy the ZIP's contents over your repo (replace files, keep `.git`), commit, push to `main`. (`docs/UPLOAD_MANIFEST.md` lists what changed.)
+- **Pages source:** either *GitHub Actions* (the included `.github/workflows/pages.yml` runs the tests, then publishes only site files; untested until its first run) or *Deploy from a branch* (root). Both work.
+- After deploy: hard-reload; the app shows "A new version is ready, reload?" because the service worker updates (cache `shinkalife-v4`). Bump `VERSION` in `sw.js` on future releases.
 
-### Verify after connecting (tell me the results)
-- Sign up, confirm the email (if enabled), log in, **reload the page** (you should stay logged in), log out, request a password reset and use the link.
-- *Table Editor*: your user has a row in `profiles` and `preferences`, and every table shows RLS enabled.
-- Make two accounts, A and B. Add a quest as A. B must not see it. Do not use the SQL Editor to test this: it runs as an admin and bypasses RLS.
-- Complete a quest: Character shows the XP. Reopen and complete again: no extra XP.
-- Change the theme on one device, log in on another: the theme follows you.
-- Calendar: an overlapping event is rejected; a planner proposal can be rejected without changing anything, and approved.
-- Advanced (optional) RLS check as user A inside the SQL editor: `begin; set local role authenticated; select set_config('request.jwt.claim.sub', '<A-user-uuid>', true); select count(*) from tasks; rollback;`
+## 5. Assistant, AI, offline, reminders
+- **Assistant** (Planner page): name it in Settings. Works with built-in rules, labelled "Rule-based", also offline. **AI is OFF** until you deploy the Edge Function and each user opts in: `docs/AI_SETUP.md` (costs depend on the provider you choose; nothing is enabled without your approval).
+- **Offline:** `docs/OFFLINE.md`. **Reminders/notifications:** `docs/NOTIFICATIONS.md` (in-app and while-open system notifications work; **background push when the site is closed is NOT implemented**). **Android/Play:** `docs/ANDROID.md` (plan only, not built). Privacy draft: `docs/PRIVACY.md`.
 
-## Deploy (GitHub Pages)
-The frontend is fully static and uses relative paths, so it works on a project sub-path. Push to `main`; `.github/workflows/pages.yml` runs the tests and publishes (untested until first push; enable Pages > Source: GitHub Actions). `js/config.js` (public URL + publishable key) is committed with the site: safe only because RLS is on, then add the Pages URL to Supabase Redirect URLs. Pages cannot run server code: AI calls, push delivery and account deletion need a separate backend (see `docs/ARCHITECTURE.md`).
-
-## Assistant, reminders, notifications
-- **Assistant:** Planner page. Name it in Settings > Your assistant (default "Shinka"). Planning is rule-based unless you set up AI (`docs/AI_SETUP.md`; optional, costs depend on the provider you choose). Users must opt in to AI separately.
-- **Reminders:** their own page. System notifications need a click on "Enable notifications" and only work while the app is open (`docs/NOTIFICATIONS.md`).
-- **Links:** Settings > Follow along (Instagram).
-- **Redirect URLs:** use the exact address you open the site at, e.g. `https://dannyekusu.github.io/ShinkaLife/**` (capitalisation matters).
-
-## Updating your live site
-Copy the files from `shinkalife-update.zip` into your repository (same folder paths, replace when asked), commit, push to `main`, wait for Pages to rebuild, then hard-reload (the app will also offer a "new version" prompt). Run migration `0006` in Supabase first (SQL Editor), then `supabase/checks/verify_setup.sql` queries 1, 6, 7.
-
-## Docs
-`docs/ARCHITECTURE.md` trust model and layers · `docs/NOTIFICATIONS.md` reminder tiers · `docs/ANDROID.md` Capacitor plan (not built) · `docs/PRIVACY.md` draft · `docs/STATUS.md` progress and next action.
-
-## Troubleshooting
-- *"Could not find the table 'public.profiles' in the schema cache" or a banner about `award_task_xp()`:* the migrations haven't been run on THIS Supabase project (check the project ref in the dashboard URL matches `js/config.js`). Run `supabase/checks/verify_setup.sql` query 1, then apply the missing migrations in order. Only if every row says `present = true` and the error persists, run `notify pgrst, 'reload schema';` in the SQL Editor and wait 10 seconds.
-- *Setup screen even though config is filled:* hard-reload; check the browser console for a failed `vendor/supabase.js` load.
-- *"Set your available hours":* Settings > Available hours, then the planner works.
-- *Sign-up email links go to the wrong place:* fix Site URL / Redirect URLs in Supabase.
-- *Stale app after deploy:* bump `VERSION` in `sw.js`; the app prompts to reload.
-- *XP missing after completing offline:* it is retried (`claimPendingXp`); XP is only ever written by the server function.
-- *Permission denied on a table:* you skipped a migration or ran them out of order.
+## 6. Troubleshooting
+- *Red banner "database isn't fully set up", or "Could not find the table ... in the schema cache"*: run the listed migrations (section 3). Only if everything is present and it persists: `notify pgrst, 'reload schema';` then wait 10 s.
+- *Setup screen though config is filled*: hard-reload; check the console for a failed `vendor/supabase.js`.
+- *Login emails go to the wrong place / "redirect not allowed"*: fix Site URL / Redirect URLs (exact casing).
+- *Stale site after deploy*: hard-reload or accept the update prompt.
+- *"AI isn't set up"*: expected until `docs/AI_SETUP.md` is done.
+- *Changes made offline "needs attention"*: Settings > Offline & sync shows each one with the reason.

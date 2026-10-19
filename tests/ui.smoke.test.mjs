@@ -36,7 +36,7 @@ test('planner: propose, reject leaves nothing, regenerate, approve applies', asy
   await go('#/planner'); await until(() => $('#pt'));
   $('#pt').value = 'study chemistry for 2 hours, practise guitar three times this week'; submit($('#pf')); await until(() => /Approve & apply/.test($('#plan-out').textContent)); assert.match($('#plan-out').textContent, /Rule-based/); assert.ok(!/AI-assisted/.test($('#plan-out').textContent));
   $$('#plan-out button').find(b => b.textContent === 'Reject').click(); await until(() => /was not changed/.test($('#plan-out').textContent));
-  submit($('#pf')); await until(() => $$('#plan-out button').find(b => b.textContent === 'Approve & apply')); $$('#plan-out button').find(b => b.textContent === 'Approve & apply').click(); await until(() => /Applied:/.test($('#plan-out').textContent)); });
+  $('#pt').value = 'study chemistry for 2 hours, practise guitar three times this week'; submit($('#pf')); await until(() => $$('#plan-out button').find(b => b.textContent === 'Approve & apply')); $$('#plan-out button').find(b => b.textContent === 'Approve & apply').click(); await until(() => /Applied:/.test($('#plan-out').textContent)); });
 test('planner states impossible workloads instead of hiding them', async () => {
   $('#pt').value = 'finish a 40 hour project by tomorrow'; submit($('#pf')); await until(() => /Not everything fits/.test($('#plan-out').textContent)); assert.match($('#plan-out').textContent, /Options:/); });
 test('progress shows real totals and a reflection box', async () => {

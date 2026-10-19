@@ -1,4 +1,24 @@
-# ShinkaLife status (updated: assistant, reminders, notifications, Instagram)
+# ShinkaLife status: FINAL for this delivery (assistant, offline, reminders, deployment)
+## Automated results (actually run)
+- `npm test`: **167 tests: 167 pass, 0 fail, 0 skipped.**  `npm run test:db`: **116 checks: 116 pass, 0 fail** (real PostgreSQL 16, Supabase auth shimmed). Migrations 0001-0007 apply cleanly in order.
+## Implemented AND tested (automated; fakes, not your live services)
+Assistant (intents, plans, breakdown, explanations, recovery, XP/overview, out-of-scope refusal, curly-apostrophe input, name + opt-in + data-sharing flags, history save/clear, rule-based fallback when AI fails or you're offline, retry); AI Edge Function core (login, server-side opt-in, daily limit, validation, scope prompt, injection handling, output sanitising, no secret leakage); offline engine (cache, queue, idempotent replay incl. lost responses, conflicts, permanent errors, auth expiry, per-user wipe, IndexedDB + memory fallback); real-page offline cycle (offline add/complete -> queued -> sync once -> server XP once -> sign-out guard); reminders (CRUD, snooze/dismiss/done, recurrence across DST, quiet hours, caps, de-dup, categories); in-app/system-notification permission flow; Instagram links; PWA files; GitHub Pages sub-path and exact-case file names; RLS/ownership/constraints/XP/history in the database.
+## Implemented, REQUIRES YOUR CONFIGURATION (cannot work until you do it)
+- Supabase migrations 0001-0007 on your project (run in order; verify with `supabase/checks/verify_setup.sql`).
+- Supabase Auth redirect URLs for the exact live address.
+- AI: deploy `supabase/functions/plan/index.ts`, add provider secrets, set `AI_ENDPOINT`: your decision on a provider and its cost (`docs/AI_SETUP.md`). Without it the assistant is rule-based and says so.
+## NOT verified (needs real browsers/devices/accounts)
+Live Supabase sign-in/sign-up/reset emails and RLS through the real API; the Edge Function deployed and talking to a real provider; the Supabase JS session behaviour on an offline app start; service-worker install/update and offline start in real browsers; system notifications on real devices; phone layout of the 8-item bottom nav; the GitHub Actions workflow; the live site address/casing (my tools could not load it).
+## NOT implemented
+Background push when the site is closed; account deletion; recurring tasks/projects; Capacitor/Android build; drag-and-drop calendar editing. The unreferenced files `js/recurrence.js`, `js/reminders.js`, `js/scheduler.js`, `js/xp.js` (origin unknown, unused, XP constants differ from the tested SQL) are still present: delete them when you're sure.
+## Bugs found and fixed in this stretch (by tests)
+Conflict messages were mistaken for network errors (sync stalled); iOS notification text; AI task/context caps counted invalid entries; reminders list rendered as "[object HTMLDivElement]"; the rule parser turned any sentence into a task and ignored "X and Y"; "help me ..." was read as bare "help"; curly apostrophes broke intent detection; sample-lecture seed was invisible on Sundays; test-helper syntax slip.
+## Next actions
+1. **You:** run missing migrations; upload files; set Auth URLs; verify per README; tell me any errors.
+2. **You, optional:** approve an AI provider and follow `docs/AI_SETUP.md`.
+3. **Me after your results:** live fixes; background push (needs VAPID + scheduled function); account deletion function; real-device checks.
+---
+## Earlier history
 ## Latest session summary
 - **Found:** migration 0006 and its DB tests already existed but NO app code used them. Reviewed and verified 0006 (103 DB checks pass, 34 for 0006) rather than writing a competing migration.
 - **Built:** assistant name + AI opt-in (service, repos, Settings, Planner), real reminders (create/edit/snooze/done/dismiss/delete, recurrence, categories, quiet hours, cap, dedupe) with Reminders page + dashboard cards + in-app ticker + opt-in system notifications, rule-based goal splitting, Planner check-in, Instagram links, AI Edge Function (`supabase/functions/plan`, not deployed), DB self-check extended for 0006.

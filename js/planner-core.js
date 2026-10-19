@@ -12,7 +12,7 @@ const timeOf = c => { const m = c.match(/\bat\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)
 const durOf = c => { const h = c.match(/(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hours?)\b/i), m = c.match(/(\d+)\s*(?:m|min|mins|minutes?)\b/i); return h || m ? Math.round((h ? +h[1] * 60 : 0) + (m ? +m[1] : 0)) : null; };
 
 export function parsePlan(text, { nowMs, tz }) {
-  const clauses = String(text).replace(/\s+/g, ' ').split(/[.;\n]|,\s*/).map(s => s.trim().replace(/^and\s+/i, '')).filter(Boolean);
+  const clauses = String(text).replace(/\s+/g, ' ').split(/[.;\n]|,\s*|\s+and\s+(?=(?:i\s|need|want|have|do\b|practi[sc]e|study|revise|read|write|finish|complete|submit|work\b|learn|exercise|train|draw|paint|code|prepare|review|call|email|clean|a\s|an\s|the\s|my\s|\d))/i).map(s => s.trim().replace(/^and\s+/i, '')).filter(Boolean);
   const tasks = [], fixed = [], questions = []; let n = 0;
   for (const c of clauses) {
     const low = c.toLowerCase(), assumptions = [], day = DAYS.findIndex(d => low.includes(d)), today = /\btoday\b/.test(low), tomorrow = /\btomorrow\b/.test(low);

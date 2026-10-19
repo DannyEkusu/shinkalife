@@ -8,12 +8,16 @@ import { createService } from './service.js';
 import { createServerProvider } from './planner-ai.js';
 import { CONFIG } from './config.js';
 import { checkDatabase } from './dbcheck.js';
+import { openStore } from './kv.js';
+import { createOfflineRepo, isNetworkError } from './offline.js';
 import { state } from './state.js';
 import * as Pages from './pages.js';
 const $ = s => document.querySelector(s);
 const show = id => document.querySelectorAll('.view').forEach(e => { e.hidden = e.id !== id; });
 const note = (el, text, ok) => { el.textContent = text; el.className = 'msg ' + (ok ? 'ok' : 'err'); };
 let recovering = /[#&?]type=recovery/.test(location.hash + location.search);   // captured before supabase-js clears the URL
+let offlineSession = false;
+const lastUser = () => { try { return JSON.parse(localStorage.getItem('shinkalife.lastUser'))?.id || null; } catch { return null; } };
 let user = null, preview = false, theme = T.loadLocal();
 T.applyTheme(theme);
 
@@ -44,6 +48,33 @@ $('#c-reset').onclick = () => change({ ...T.DEFAULT_THEME }, true);
 
 const PAGES = ['dashboard', 'calendar', 'planner', 'reminders', 'quests', 'character', 'progress', 'settings'];
 const LOAD = { dashboard: Pages.dashboard, calendar: Pages.calendar, planner: Pages.planner, reminders: Pages.reminders, quests: () => Quests.show(user), character: Pages.character, progress: Pages.progress, settings: Pages.settingsExtras };
+const NET_LABEL = { online: ['●', 'Online'], offline: ['○', 'Offline: saved on this device'], syncing: ['↻', 'Syncing…'], error: ['!', 'Sync needs attention'] };
+function renderNet(s) {
+  const el = $('#net-status'); if (!state.offline) { el.hidden = true; return; }
+  const [icon, text] = NET_LABEL[s.status]; el.hidden = false; el.dataset.status = s.status; el.textContent = `${icon} ${text}${s.pending && s.status !== 'syncing' ? ` · ${s.pending} waiting` : s.status === 'syncing' ? ` ${s.pending} change${s.pending === 1 ? '' : 's'}` : ''}`;
+  el.setAttribute('aria-label', `Connection status: ${text}${s.pending ? `, ${s.pending} changes waiting` : ''}. Open sync details`); Pages.renderOfflinePanel?.();
+}
+$('#net-status').onclick = () => { location.hash = '#/settings'; setTimeout(() => $('#offline-panel')?.scrollIntoView?.({ block: 'start' }), 300); };
+async function useRealRepo(uid, provider) {   // the real database, wrapped so it keeps working offline
+  const store = await openStore(), off = createOfflineRepo({ inner: supabaseRepo, store, userId: uid }); await off.load();
+  state.offline = off; off.subscribe(renderNet); setRepo(off.repo, 'supabase'); state.svc = createService(repo, { provider });
+  try { localStorage.setItem('shinkalife.lastUser', JSON.stringify({ id: uid })); } catch { /* storage blocked: offline start just won't be offered */ }
+  renderNet(off.state()); off.sync().catch(() => {});
+}
+function primeCaches() {   // while online, keep a copy of the essentials on this device so they open offline later
+  if (!state.svc || navigator.onLine === false) return; const now = Date.now(), iso = ms => new Date(ms).toISOString();
+  Promise.allSettled([repo.listTasks(), repo.listCategories(), repo.listReminders(), repo.listEvents(), repo.getAvailability(), repo.getReminderSettings(), repo.getAssistantPrefs(), repo.listLedger(), repo.listAchievements(), repo.getProfile(), repo.listBlocks(iso(now - 14 * 864e5), iso(now + 60 * 864e5)), repo.listMessages(60)]);
+}
+async function enterOffline(uid) {   // app opened without a connection and no session could be confirmed: use the saved copy, read/queue only
+  offlineSession = true; user = { id: uid }; preview = false; state.mock = false; $('#mock-banner').hidden = true; await useRealRepo(uid, null);
+  $('#offline-banner').hidden = false; show('view-app'); route(); renderTheme(); try { const p = await repo.getProfile(); state.tz = p?.timezone ?? 'UTC'; $('#p-name').value = p?.display_name ?? ''; $('#p-tz').value = p?.timezone ?? 'UTC'; greet(p?.display_name); } catch { greet(); }
+}
+addEventListener('online', async () => { if (offlineSession && A.configured) { const { data } = await A.sb.auth.getSession(); offlineSession = false; $('#offline-banner').hidden = true; if (data.session) enterApp(data.session); else show('view-auth'); return; } state.offline?.notifyOnline(); });
+addEventListener('offline', () => state.offline?.notifyOffline());
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); state.installPrompt = e; });
+addEventListener('appinstalled', () => { state.installPrompt = null; });
+document.addEventListener('visibilitychange', () => { if (!document.hidden) state.offline?.sync().catch(() => {}); });
+setInterval(() => { const s = state.offline?.state(); if (s?.pending && navigator.onLine !== false) state.offline.sync().catch(() => {}); }, 30000);
 function route() {
   const want = (location.hash.match(/^#\/(\w+)/) || [])[1] || 'dashboard', cur = PAGES.includes(want) ? want : 'dashboard';
   for (const p of PAGES) $('#page-' + p).hidden = p !== cur;
@@ -63,15 +94,18 @@ $('#p-tz').replaceChildren(...tzs.map(z => { const o = document.createElement('o
 
 async function enterApp(session) {
   user = session.user; preview = false; state.mock = false; $('#mock-banner').hidden = true;
-  const provider = CONFIG.AI_ENDPOINT ? createServerProvider({ endpoint: CONFIG.AI_ENDPOINT, getToken: async () => (await A.sb.auth.getSession()).data.session?.access_token }) : null;
-  setRepo(supabaseRepo, 'supabase'); state.svc = createService(repo, { provider }); $('#preview-banner').hidden = true; show('view-app'); route();
+  const provider = CONFIG.AI_ENDPOINT ? createServerProvider({ endpoint: CONFIG.AI_ENDPOINT, headers: { apikey: CONFIG.SUPABASE_ANON_KEY }, getToken: async () => (await A.sb.auth.getSession()).data.session?.access_token }) : null;
+  await useRealRepo(user.id, provider); $('#preview-banner').hidden = true; show('view-app'); route();
   try {
     const { profile, theme: remote } = await A.loadAccount(user.id);
     if (remote && Object.keys(remote).length) { theme = T.sanitizeTheme(remote); T.applyTheme(theme); T.saveLocal(theme); }
     $('#p-name').value = profile?.display_name ?? ''; $('#p-tz').value = profile?.timezone ?? 'UTC'; state.tz = profile?.timezone ?? 'UTC';
     greet(profile?.display_name);
-  } catch (e) { note($('#prof-msg'), 'Could not load your profile: ' + e.message); greet(); }
-  renderTheme(); route();
+  } catch (e) {   // offline or temporarily unreachable: show the copy saved on this device instead
+    try { const p = await repo.getProfile(); $('#p-name').value = p?.display_name ?? ''; $('#p-tz').value = p?.timezone ?? 'UTC'; state.tz = p?.timezone ?? 'UTC'; greet(p?.display_name); if (!isNetworkError(e)) note($('#prof-msg'), 'Could not load your profile: ' + e.message); }
+    catch { note($('#prof-msg'), 'Could not load your profile: ' + e.message); greet(); }
+  }
+  renderTheme(); route(); primeCaches();
   checkDatabase(A.sb).then(r => { const b = $('#db-banner'); b.hidden = r.ok; if (r.unreachable) b.textContent = 'Can’t reach Supabase right now. Check your connection; nothing has been lost.'; else if (r.missing.length) b.textContent = `Your Supabase database isn’t fully set up. Missing: ${r.missing.map(m => m.name).join(', ')}. Run migration${r.migrations.length > 1 ? 's' : ''} ${r.migrations.join(', ')} in the Supabase SQL Editor (see README), then reload.`; }).catch(() => {});
 }
 $('#f-prof').onsubmit = async e => {
@@ -97,7 +131,9 @@ $('#btn-forgot').onclick = () => { const em = $('#in-email').value.trim(); if (!
 $('#f-rec').onsubmit = e => { e.preventDefault(); const pw = $('#rec-pw').value;
   if (pw.length < 8) return note($('#rec-msg'), 'Password must be at least 8 characters.');
   guard($('#rec-msg'), async () => { await A.updatePassword(pw); note($('#rec-msg'), 'Password updated.', true); setTimeout(async () => { recovering = false; location.hash = '#/dashboard'; const { data } = await A.sb.auth.getSession(); if (data.session) enterApp(data.session); else show('view-auth'); }, 800); }); };
-$('#btn-out').onclick = async () => { if (state.mock) { state.mock = false; setRepo(null, 'none'); state.svc = null; state.assistantName = null; user = null; Quests.reset(); $('#mock-banner').hidden = true; $('#btn-out').textContent = 'Log out'; show('view-setup'); return; } if (preview) { show('view-setup'); return; } try { await A.signOut(); } catch (e) { note($('#theme-msg'), e.message); } };
+$('#btn-out').onclick = async () => {
+  if (offlineSession) { offlineSession = false; user = null; state.offline = null; state.svc = null; Quests.reset(); Pages.resetPages(); setRepo(null, 'none'); $('#offline-banner').hidden = true; $('#net-status').hidden = true; show('view-auth'); return; }
+  if (state.offline) { const s = state.offline.state(); if (s.pending && !confirm(`You have ${s.pending} change${s.pending > 1 ? 's' : ''} that haven’t synced yet. Signing out will discard ${s.pending > 1 ? 'them' : 'it'}. Sign out anyway?`)) return; await state.offline.wipe(); state.offline = null; try { localStorage.removeItem('shinkalife.lastUser'); } catch {} $('#net-status').hidden = true; Pages.resetPages(); } if (state.mock) { state.mock = false; setRepo(null, 'none'); state.svc = null; state.assistantName = null; user = null; Quests.reset(); $('#mock-banner').hidden = true; $('#btn-out').textContent = 'Log out'; show('view-setup'); return; } if (preview) { show('view-setup'); return; } try { await A.signOut(); } catch (e) { note($('#theme-msg'), e.message); } };
 function enterMock() { // explicit, visibly-labelled development mode; never entered automatically after an error
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; setRepo(createMockRepo({ tz }), 'mock'); state.svc = createService(repo, {}); state.mock = true; state.tz = tz; user = { id: 'mock' }; preview = false;
   $('#mock-banner').hidden = false; $('#preview-banner').hidden = true; show('view-app'); $('#p-name').value = 'Sample user'; $('#p-tz').value = tz; $('#p-save').disabled = false; $('#btn-out').textContent = 'Exit sample mode'; greet('Sample user'); renderTheme(); route();
@@ -111,7 +147,7 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.ser
 if (new URLSearchParams(location.search).get('mock') === '1') enterMock();
 else if (!A.configured) { show('view-setup'); const i = $('#setup-issue'); i.textContent = A.configIssue || (globalThis.supabase ? '' : 'The Supabase library (vendor/supabase.js) failed to load.'); i.hidden = !i.textContent; }
 else {
-  const clearPrivate = () => { for (const s of ['#dash-dyn', '#cal-root', '#plan-root', '#rem-root', '#char-root', '#prog-root', '#set-dyn', '#q-list']) $(s)?.replaceChildren(); $('#p-name').value = ''; $('#db-banner').hidden = true; };
+  const clearPrivate = () => { for (const s of ['#dash-dyn', '#cal-root', '#plan-root', '#rem-root', '#char-root', '#prog-root', '#set-dyn', '#q-list']) $(s)?.replaceChildren(); $('#p-name').value = ''; $('#db-banner').hidden = true; $('#rem-root')?.replaceChildren(); };
   A.sb.auth.onAuthStateChange((ev, session) => setTimeout(() => {      // deferred: supabase-js must not be re-entered from inside its own callback
     if (ev === 'PASSWORD_RECOVERY') { recovering = true; return show('view-recovery'); }
     if (session) {
@@ -119,6 +155,6 @@ else {
       if (user && session.user.id === user.id) { user = session.user; return; }   // TOKEN_REFRESHED / USER_UPDATED / duplicate SIGNED_IN: don't reload the whole app
       return enterApp(session);
     }
-    if (!recovering) { user = null; setRepo(null, 'none'); state.svc = null; state.assistantName = null; Quests.reset(); clearPrivate(); show('view-auth'); }   // signed out: wipe private data from the page
+    if (!recovering) { if (navigator.onLine === false && lastUser()) return enterOffline(lastUser()); user = null; state.offline = null; $('#net-status').hidden = true; Pages.resetPages(); setRepo(null, 'none'); state.svc = null; state.assistantName = null; Quests.reset(); clearPrivate(); show('view-auth'); }   // signed out: wipe private data from the page
   }, 0));
 }

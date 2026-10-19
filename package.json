@@ -8,6 +8,7 @@
     "test:db": "bash tests/db/run.sh"
   },
   "devDependencies": {
+    "fake-indexeddb": "^6.2.6",
     "jsdom": "^30.1.2"
   }
 }
